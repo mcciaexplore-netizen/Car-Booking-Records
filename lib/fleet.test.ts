@@ -1,0 +1,11 @@
+import assert from 'node:assert/strict';
+import {test} from 'node:test';
+import {overlap,validateBooking,classifyTrip,validateTrip,validateReturn,csv,initialBookings,initialTrips} from './fleet.ts';
+test('adjacent bookings are allowed; true overlap is blocked',()=>{assert.equal(overlap({start:'2026-09-05T09:00',end:'2026-09-05T12:00'},{start:'2026-09-05T12:00',end:'2026-09-05T13:00'}),false);assert.throws(()=>validateBooking({...initialBookings[0],id:'NEW'},initialBookings),/already/)});
+test('booking validates duration and vehicle capacity',()=>{assert.throws(()=>validateBooking({...initialBookings[1],end:initialBookings[1].start},[]),/after/);assert.throws(()=>validateBooking({...initialBookings[1],people:5},[]),/capacity/)});
+test('matching approval grants authorization and absent approval requires review',()=>{assert.equal(classifyTrip(initialTrips[0],initialBookings).permission,'Authorized');assert.equal(classifyTrip(initialTrips[1],initialBookings).permission,'Needs review')});
+test('late approval does not authorize an earlier trip',()=>{const bs=initialBookings.map(b=>({...b,approvedAt:'2026-09-05T12:00'}));assert.equal(classifyTrip(initialTrips[0],bs).permission,'Needs review')});
+test('driver mismatch, timing and excess people require review',()=>{for(const changes of [{driver:'Other driver'},{start:'2026-09-05T10:01'},{people:4}])assert.equal(classifyTrip({...initialTrips[0],...changes},initialBookings).permission,'Needs review')});
+test('duplicate open checkout and odometer rollback are rejected',()=>{assert.throws(()=>validateTrip(initialTrips[0],initialTrips),/open trip/);assert.throws(()=>validateTrip({...initialTrips[1],start:'2026-09-05T12:00',startOdo:100},initialTrips),/odometer/)});
+test('return validates elapsed time, distance and fuel',()=>{assert.throws(()=>validateReturn(initialTrips[0],'2026-09-05T08:00',42200,50),/after/);assert.throws(()=>validateReturn(initialTrips[0],'2026-09-05T12:00',41000,50),/odometer/);assert.doesNotThrow(()=>validateReturn(initialTrips[0],'2026-09-05T12:00',42200,50))});
+test('CSV neutralizes formula injection and escapes quotes',()=>{const result=csv([{name:'=SUM(1,2)',note:'A "quote"'}]);assert.ok(result.includes("'=SUM"));assert.ok(result.includes('""quote""'))});
