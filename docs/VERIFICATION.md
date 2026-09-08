@@ -53,3 +53,7 @@ Production dependency audit (`npm audit --omit=dev`) reported **0 vulnerabilitie
 | Costs | Actual Zoho/Sites/Azure account charges, included allowances and billing alerts. Public rates are documented, not an account quotation. |
 
 Automated mocked integration checks do not prove that the real Zoho account, OCR accuracy, production roles, remote storage, browser interactions or scheduler work. Those remain mandatory pilot checks before company rollout.
+
+A concurrent update to the existing site was preserved: /source-preview holds the supplied-file historical comparison, with server-gated data and authenticated exports. It is distinct from the operational database and does not establish prior approval. Those source files do not include original register images, reliable actual departure times or approval-history evidence.
+
+The preserved prototype/historical comparison also passed its 16 regression checks. A build-asset check found zero sampled historical record IDs in publicly served client JavaScript; the historical dataset is supplied only after server authentication.

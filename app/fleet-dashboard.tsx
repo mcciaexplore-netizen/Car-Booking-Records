@@ -331,6 +331,13 @@ export default function Dashboard() {
                 : 'Awaiting first successful import'}
             </small>
           </div>
+          <a
+            href="/source-preview"
+            className="text-link"
+            style={{ margin: '8px 16px' }}
+          >
+            Historical file preview <ExternalLink size={14} />
+          </a>
           <div className="profile">
             <span className="avatar">
               <LockKeyhole size={16} />

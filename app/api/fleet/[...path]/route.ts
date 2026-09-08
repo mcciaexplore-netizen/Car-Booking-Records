@@ -44,6 +44,17 @@ export async function GET(request: Request) {
     const [route, recordId] = parts(request),
       user = await member();
     const params = new URL(request.url).searchParams;
+    if (route === 'historical-export') {
+      const { historicalRows } = await import('../../../../lib/historical');
+      return new Response('\ufeff' + csv(historicalRows(params)), {
+        headers: {
+          'Content-Type': 'text/csv;charset=utf-8',
+          'Content-Disposition':
+            'attachment; filename=fleet-historical-preview.csv',
+          'Cache-Control': 'private, no-store',
+        },
+      });
+    }
     if (route === 'snapshot')
       return json({ user, ...(await snapshot(params)) });
     if (route === 'export') {

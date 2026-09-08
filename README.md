@@ -15,3 +15,5 @@ Includes server-enforced roles, read-only regional Zoho OAuth and metadata disco
 Use Node 24. Run `npm ci`, `npm test`, `npm run typecheck`, `npm run build`. Start the local preview with `npm run dev`. Generate schema migrations with `npm run db:generate`.
 
 The application page is `app/fleet-dashboard.tsx`; server endpoints are in `app/api/fleet/[...path]/route.ts`. The old prototype modules are not imported by the current page. Tests use isolated fixtures and an in-memory SQLite adapter, never company data. Local emulator state and `.dev.vars` are ignored by Git; production secrets belong in the hosting secret manager.
+
+The newer supplied-file reconciliation preview is preserved at /source-preview behind authentication; its historical rows are not included in confirmed operational totals. The original fictitious workflow remains explicitly separated at /demo.
