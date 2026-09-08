@@ -1,10 +1,14 @@
 # Fleet Desk
 
-Interactive dashboard prototype for two company vehicles. All names, trips and costs are samples. No Zoho account is connected. State exists only in React memory and resets on reload. The private Site is intended for the owner to review, not for company operations.
+Private sample reconciliation dashboard for two company vehicles. The home page uses user-supplied records: 374 actual-trip rows, 369 Zoho booking rows and 332 image-derived booking rows. The 144 consolidated trip copies are linked as evidence, not counted again. No live Zoho account or OCR service is connected. OTP codes and internal account identifiers are excluded from the published sample data.
+
+The home page supports source-aware comparison, date and vehicle filters, candidate inspection, data-quality warnings and CSV export. Candidates are not permission decisions: Assigned is not proof of approval, and these files lack approval timestamps and shared booking IDs. Six absent dates and seven month-section conflicts are withheld from matching. Distance is calculated only from valid odometer pairs (54,070 km across 373 rows); missing distance is not treated as zero. Fuel information and current availability are not supplied. Original values are preserved; fuzzy names are suggestions only.
+
+The original fictitious interactive workflow is available separately at `/demo`. Its edits exist only in memory and reset on reload. The private Site is intended for owner review, not company operations.
 
 Implemented: overview, two vehicle status panels, booking creation and approval/rejection, departure and return register, fuel entries, permission review decisions with original evidence retained, search, status filters and CSV export. Sample baseline: 5 September 2026, 11:30 IST. New approvals use current IST, so approving a past booking cannot retrospectively authorize an earlier trip.
 
-Run `npm run dev` for development and `npm run build` to build. Core permission and register checks: `node --test lib/fleet.test.ts`.
+Run `npm run dev` for development and `npm run build` to build. Checks: `node --test lib/fleet.test.ts lib/reconcile.test.ts`.
 
 ## Connecting Zoho Creator
 
