@@ -1,0 +1,20 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1788855758573,
+      "tag": "0000_secret_doctor_faustus",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1788857123582,
+      "tag": "0001_mysterious_deadpool",
+      "breakpoints": true
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "name": "fleet-desk-scheduler",
+  "main": "scheduler-worker.ts",
+  "compatibility_date": "2026-05-15",
+  "triggers": { "crons": ["*/5 * * * *"] },
+}

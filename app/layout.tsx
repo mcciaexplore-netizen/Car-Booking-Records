@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: 'Fleet Desk | Company Car Register',
-  description: 'An interactive sample dashboard for two company vehicles, bookings, trip registers and permission reviews.',
+  description: 'Private company vehicle records, register review and evidence-based booking reconciliation.',
 };
 
 export default function RootLayout({

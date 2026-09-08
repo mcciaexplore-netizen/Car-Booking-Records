@@ -36,3 +36,7 @@ next-env.d.ts
 /.wrangler/
 /outputs/
 /work/
+/.dev.vars
+*.tar.gz
+*.tsbuildinfo
+work-audit*.json

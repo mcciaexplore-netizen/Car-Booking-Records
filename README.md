@@ -1,17 +1,17 @@
 # Fleet Desk
 
-Interactive dashboard prototype for two company vehicles. All names, trips and costs are samples. No Zoho account is connected. State exists only in React memory and resets on reload. The private Site is intended for the owner to review, not for company operations.
+External company vehicle dashboard upgraded from the existing Fleet Desk prototype. Preserves its visual system, navigation, vehicle panels and register workflows while replacing sample state with authenticated D1/R2 storage.
 
-Implemented: overview, two vehicle status panels, booking creation and approval/rejection, departure and return register, fuel entries, permission review decisions with original evidence retained, search, status filters and CSV export. Sample baseline: 5 September 2026, 11:30 IST. New approvals use current IST, so approving a past booking cannot retrospectively authorize an earlier trip.
+Includes server-enforced roles, read-only regional Zoho OAuth and metadata discovery, paginated and incremental sync, private uploads, duplicate detection, source review, conservative reconciliation, nine KPIs, filtered registers, CSV exports and internal alerts.
 
-Run `npm run dev` for development and `npm run build` to build. Core permission and register checks: `node --test lib/fleet.test.ts`.
+**No live Zoho data, sample fleet records or real OCR results are displayed.** OAuth account access, actual field mappings, register samples, OCR credentials and unattended scheduling still need setup and verification. Zoho write-back and external notifications are disabled.
 
-## Connecting Zoho Creator
+- [Connection, access and review guide](docs/OPERATIONS.md)
+- [Data model, mappings, reconciliation and metrics](docs/DATA-MODEL.md)
+- [Deployment and rollback](docs/DEPLOYMENT.md)
+- [Recurring costs and limits](docs/COSTS-AND-LIMITS.md)
+- [Verification and outstanding inputs](docs/VERIFICATION.md)
 
-Before using real records, replace sample state with authenticated server-side access to Creator forms for Vehicles, Bookings, Trips, Fuel and Review Decisions. Obtain account owner, app link names, form/report field link names and the account data centre from the actual account. Keep OAuth credentials in server secrets. Implement role enforcement in Creator/server endpoints; the demo admin label is not authentication. Recheck vehicle reservations atomically at approval and checkout to prevent concurrent conflicts. Require trustworthy prior approval evidence and an independent gate/key register for actual vehicle movements. Store permission decisions as append-only records. Add photo/receipt storage, retries, idempotency keys and scheduled reconciliation only when configured. A dashboard cannot identify an unreported journey on its own.
+Use Node 24. Run `npm ci`, `npm test`, `npm run typecheck`, `npm run build`. Start the local preview with `npm run dev`. Generate schema migrations with `npm run db:generate`.
 
-Booking references join requests to trips. Both employee and driver are checked separately. Vehicle, departure tolerance (-30/+60 minutes), passenger count and approval timestamp are compared. Missing or mismatched evidence becomes Needs review. Confirmed Unauthorized and Exception accepted outcomes preserve the original result; accepted exceptions never count as prior approval.
-
-## Validation limitations
-
-Browser interaction/visual testing was not requested. Imperative WebMCP navigation and read tools are feature-detected; no supported WebMCP validation context was available during development. They are not required for using the UI.
+The application page is `app/fleet-dashboard.tsx`; server endpoints are in `app/api/fleet/[...path]/route.ts`. The old prototype modules are not imported by the current page. Tests use isolated fixtures and an in-memory SQLite adapter, never company data. Local emulator state and `.dev.vars` are ignored by Git; production secrets belong in the hosting secret manager.

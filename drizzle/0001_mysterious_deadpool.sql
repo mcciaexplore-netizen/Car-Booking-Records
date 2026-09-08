@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX `one_active_sync` ON `sync_runs` ((1)) WHERE status IN ('syncing','retrying');
