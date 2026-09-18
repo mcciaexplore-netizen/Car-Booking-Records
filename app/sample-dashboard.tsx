@@ -1,4 +1,5 @@
 'use client';
+import { McciaLogo } from './mccia-brand';
 import { useMemo, useEffect, useRef, type ReactNode } from 'react';
 import {
   CarFront,
@@ -277,14 +278,7 @@ export default function SampleDashboard({ input }: { input: SampleInput }) {
     <SidebarProvider>
       <Sidebar className="fleet-sidebar">
         <SidebarHeader>
-          <div className="brand">
-            <span className="brand-icon">
-              <CarFront size={23} />
-            </span>
-            <div>
-              Fleet Desk<small>COMPANY VEHICLES</small>
-            </div>
-          </div>
+          <div className="brand mccia-brand"><McciaLogo /><div className="brand-title">Car Booking Details<small>MCCIA · Vehicle operations</small></div></div>
         </SidebarHeader>
         <SidebarContent>
           <p className="nav-label">SAMPLE RECONCILIATION</p>
@@ -322,11 +316,8 @@ export default function SampleDashboard({ input }: { input: SampleInput }) {
       <main id="fleet-main" tabIndex={-1} className="workspace">
         <header className="topbar">
           <div className="flex items-center gap-3">
-            <SidebarTrigger />
-            <span>
-              Fleet Desk <span className="slash">/</span>
-              {view}
-            </span>
+            <SidebarTrigger /><McciaLogo className="mccia-header-logo" />
+            <span className="header-current-view">{view}</span>
           </div>
           <span className="demo-label">SUPPLIED SAMPLES</span>
         </header>
@@ -940,7 +931,7 @@ export default function SampleDashboard({ input }: { input: SampleInput }) {
             </div>
           )}
           <footer className="page-footer">
-            Fleet Desk · Supplied sample records
+            Car Booking Details · Supplied sample records
             <span>Imported 8 September 2026 · Original files unchanged</span>
           </footer>
         </div>

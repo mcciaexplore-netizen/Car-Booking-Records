@@ -1,0 +1,59 @@
+.mccia-logo {
+  display: block;
+  position: relative;
+  width: 9.5rem;
+  aspect-ratio: 540 / 156;
+  overflow: hidden;
+  flex-shrink: 0;
+  border-radius: 0.25rem;
+  background: #fff;
+}
+.mccia-logo > img {
+  position: absolute;
+  width: 134.074074%;
+  max-width: none;
+  height: auto;
+  left: -17.592593%;
+  top: -169.871795%;
+}
+:is(.fleet-sidebar, [data-mobile='true']) .brand.mccia-brand {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.875rem;
+  padding: 1.5rem 1rem;
+}
+.brand.mccia-brand .brand-title {
+  font-size: 1.0625rem;
+  font-weight: 600;
+  line-height: 1.35;
+  letter-spacing: -0.02em;
+  white-space: normal;
+}
+.brand.mccia-brand small {
+  font-size: 0.75rem;
+  line-height: 1.5;
+  margin-top: 0.3rem;
+}
+.mccia-header-logo {
+  width: 5.5rem;
+}
+.mccia-login-logo {
+  width: 10.5rem;
+  margin-bottom: 1.5rem;
+}
+.topbar > div {
+  min-width: 0;
+}
+.header-current-view {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+@media (max-width: 600px) {
+  .mccia-header-logo {
+    width: 4.5rem;
+  }
+  .topbar .demo-label {
+    display: none;
+  }
+}

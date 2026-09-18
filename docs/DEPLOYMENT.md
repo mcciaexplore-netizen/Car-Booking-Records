@@ -1,5 +1,7 @@
 # Deployment and rollback
 
+> The current checkout is being migrated to Vercel and renamed **Car Booking Details**. Use [VERCEL-DEPLOYMENT.md](VERCEL-DEPLOYMENT.md). The instructions below describe the previous Sites deployment and must not be used to publish this migrated checkout.
+
 The checkout is bound to the existing private Company Car Register / Fleet Desk project in `.openai/hosting.json`. Reuse that project ID and preserve its private audience.
 
 1. Review the version and account hosting/storage charges. Confirm publication to the existing private audience.

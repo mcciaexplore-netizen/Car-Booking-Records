@@ -82,7 +82,7 @@ export async function reserveCall() {
   if (!result.meta.changes)
     throw new HttpError(
       429,
-      'Fleet Desk daily API budget reached. Synchronization resumes after the UTC budget reset.',
+      'Car Booking Details daily API budget reached. Synchronization resumes after the UTC budget reset.',
     );
 }
 export async function zohoGet(

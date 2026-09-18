@@ -1,4 +1,5 @@
 'use client';
+import { McciaLogo } from './mccia-brand';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { LatestRequest } from '@/lib/latest-request';
 import { useFleetNavigation, useDebounced } from './fleet-navigation';
@@ -383,14 +384,7 @@ export default function Dashboard() {
       </a>
       <Sidebar className="fleet-sidebar">
         <SidebarHeader>
-          <div className="brand">
-            <span className="brand-icon">
-              <CarFront size={23} />
-            </span>
-            <div>
-              Fleet Desk<small>MCCIA · Vehicle operations</small>
-            </div>
-          </div>
+          <div className="brand mccia-brand"><McciaLogo /><div className="brand-title">Car Booking Details<small>MCCIA · Vehicle operations</small></div></div>
         </SidebarHeader>
         <SidebarContent>
           <WorkspaceNavigation
@@ -425,7 +419,7 @@ export default function Dashboard() {
             </div>
             {data && (
               <a
-                href="/signout-with-chatgpt?return_to=/"
+                href="/logout"
                 target="_top"
                 aria-label="Sign out"
               >
@@ -438,11 +432,8 @@ export default function Dashboard() {
       <main className="workspace" id="fleet-main" tabIndex={-1}>
         <header className="topbar">
           <div className="flex items-center gap-3">
-            <SidebarTrigger />
-            <span>
-              <span className="breadcrumb-root">MCCIA / </span>
-              {view}
-            </span>
+            <SidebarTrigger /><McciaLogo className="mccia-header-logo" />
+            <span className="header-current-view">{view}</span>
           </div>
           <span className="demo-label">
             <LockKeyhole size={13} />
@@ -558,12 +549,12 @@ export default function Dashboard() {
                 {auth === 403
                   ? 'Access has not been granted'
                   : auth === 401
-                    ? 'Sign in to Fleet Desk'
+                    ? 'Sign in to Car Booking Details'
                     : 'Records are temporarily unavailable'}
               </h2>
               <p>
                 {auth === 403
-                  ? 'Ask the Fleet Desk administrator to grant your account access.'
+                  ? 'Ask the Car Booking Details administrator to grant your account access.'
                   : auth === 401
                     ? 'Use an authorized account to view company records and attachments.'
                     : 'Retry the connection. Saved records have not been removed.'}
@@ -572,7 +563,7 @@ export default function Dashboard() {
                 <a
                   className="signin-link"
                   href={
-                    '/signin-with-chatgpt?return_to=' +
+                    '/login?return_to=' +
                     encodeURIComponent(
                       '/' +
                         (typeof window !== 'undefined'
@@ -582,7 +573,7 @@ export default function Dashboard() {
                   }
                   target="_top"
                 >
-                  Sign in with ChatGPT <ArrowUpRight size={16} />
+                  Sign in to Car Booking Details <ArrowUpRight size={16} />
                 </a>
               )}
               <Button variant="outline" onClick={() => void load()}>

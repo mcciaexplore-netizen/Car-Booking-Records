@@ -1,24 +1,32 @@
 {
-  "name": "sites-project",
+  "name": "car-booking-details",
   "version": "0.1.0",
   "private": true,
   "engines": {
-    "node": ">=22.13.0"
+    "node": "24.x"
   },
   "scripts": {
-    "dev": "vinext dev",
+    "dev": "node --env-file-if-exists=.env.local node_modules/vite/bin/vite.js --host 127.0.0.1",
     "dev:zoho": "python scripts/zoho_local.py",
-    "build": "vinext build",
-    "start": "wrangler dev --config dist/server/wrangler.json",
+    "build": "vite build",
+    "start": "node .output/server/index.mjs",
     "lint": "oxlint",
     "format": "oxfmt",
     "test": "node scripts/build-tests.mjs && node --test tests/acceptance.test.mjs",
     "typecheck": "tsc --noEmit",
-    "db:generate": "drizzle-kit generate"
+    "db:generate": "drizzle-kit generate",
+    "build:vercel": "node scripts/build-vercel.mjs",
+    "db:migrate": "node --env-file-if-exists=.env.local scripts/migrate-vercel.mjs",
+    "test:platform": "node scripts/build-platform-tests.mjs && node --test tests/platform.test.mjs tests/migrations.test.mjs",
+    "check:vercel": "node scripts/check-vercel-build.mjs"
   },
   "dependencies": {
     "@base-ui/react": "1.7.0",
+    "@better-auth/drizzle-adapter": "1.7.5",
+    "@libsql/client": "0.18.0",
     "@shadcn/react": "0.3.0",
+    "@vercel/blob": "2.8.0",
+    "better-auth": "1.7.5",
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
     "cmdk": "1.1.1",
@@ -27,6 +35,7 @@
     "embla-carousel-react": "8.5.2",
     "input-otp": "1.4.2",
     "lucide-react": "1.31.0",
+    "nitro": "3.0.260903-beta",
     "react": "19.2.8",
     "react-day-picker": "9.8.1",
     "react-dom": "19.2.8",
@@ -39,9 +48,7 @@
     "vinext": "1.0.0-beta.9"
   },
   "devDependencies": {
-    "@cloudflare/vite-plugin": "1.54.5",
     "@cloudflare/workers-types": "5.20260730.1",
-    "@openai/sites-vite-plugin": "0.2.0",
     "@tailwindcss/postcss": "4.2.1",
     "@types/node": "22.19.19",
     "@types/react": "19.2.14",
@@ -55,7 +62,7 @@
     "tailwindcss": "4.2.1",
     "typescript": "5.9.3",
     "vite": "8.2.2",
-    "wrangler": "4.118.0"
+    "esbuild": "0.28.1"
   },
   "type": "module"
 }

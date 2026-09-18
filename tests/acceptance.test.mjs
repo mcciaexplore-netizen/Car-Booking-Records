@@ -8,6 +8,7 @@ import {
   zoho as z,
   oauth,
   documents as docs,
+  uploadIntents,
   data as dataService,
   routes,
   reporting,
@@ -76,10 +77,7 @@ beforeEach(() => {
       },
     },
   };
-  globalThis.TEST_HEADERS = new Headers({
-    'oai-authenticated-user-id': 'owner-id',
-    'oai-authenticated-user-email': 'owner@example.test',
-  });
+  globalThis.TEST_IDENTITY = { userId: 'owner-id', email: 'owner@example.test', displayName: 'Owner' };
   globalThis.fetch = realFetch;
 });
 const trip = (changes = {}) => ({
@@ -97,6 +95,37 @@ const trip = (changes = {}) => ({
   startOdo: 100,
   endOdo: 140,
   ...changes,
+});
+void test('private staged uploads over 4.5 MB finalize idempotently and duplicate content creates one document', async () => {
+  const bytes = new Uint8Array(8 * 1024 * 1024);
+  bytes.set(new TextEncoder().encode('%PDF-1.7'));
+  const metadata = { name: 'large-register.pdf', mime: 'application/pdf', size: bytes.length, kind: 'movement' };
+  const first = await uploadIntents.prepareUpload(metadata, 'owner@example.test');
+  await s.runtime().DOCUMENTS.put(first.pathname, bytes.buffer);
+  const saved = await uploadIntents.finalizeUpload(first.intentId, 'owner@example.test');
+  assert.equal(saved.duplicate, false);
+  assert.deepEqual(await uploadIntents.finalizeUpload(first.intentId, 'owner@example.test'), saved);
+  assert.equal(await s.runtime().DOCUMENTS.get(first.pathname), null);
+  const repeated = await uploadIntents.prepareUpload(metadata, 'owner@example.test');
+  await s.runtime().DOCUMENTS.put(repeated.pathname, bytes.buffer);
+  const duplicate = await uploadIntents.finalizeUpload(repeated.intentId, 'owner@example.test');
+  assert.equal(duplicate.documentId, saved.documentId);
+  assert.equal(duplicate.duplicate, true);
+  assert.equal((await s.all('SELECT * FROM documents')).length, 1);
+  assert.equal((await s.all('SELECT * FROM actual_trips')).length, 0);
+});
+void test('staging finalization checks signatures and ownership; cleanup preserves originals', async () => {
+  const metadata = { name: 'fake.pdf', mime: 'application/pdf', size: 8, kind: 'movement' };
+  const intent = await uploadIntents.prepareUpload(metadata, 'owner@example.test');
+  await s.runtime().DOCUMENTS.put(intent.pathname, new TextEncoder().encode('bad-file').buffer);
+  await assert.rejects(uploadIntents.finalizeUpload(intent.intentId, 'other@example.test'), e => e.status === 404);
+  await assert.rejects(uploadIntents.finalizeUpload(intent.intentId, 'owner@example.test'), e => e.status === 415);
+  assert.equal((await s.all('SELECT * FROM documents')).length, 0);
+  await s.runtime().DOCUMENTS.put('originals/keep', 'evidence');
+  await s.db().prepare('UPDATE upload_intents SET expiresAt=?').bind('2000-01-01T00:00:00.000Z').run();
+  assert.equal(await uploadIntents.cleanupStaging(), 1);
+  assert.equal(await s.runtime().DOCUMENTS.get(intent.pathname), null);
+  assert.ok(await s.runtime().DOCUMENTS.get('originals/keep'));
 });
 const booking = (changes = {}) => ({
   ...d.blank(),
@@ -355,13 +384,10 @@ test('review requires reason and current evidence; changed evidence cannot keep 
   assert.equal((await s.all('SELECT * FROM review_decisions')).length, 1);
 });
 test('unauthenticated and ungranted users cannot access records, images or exports', async () => {
-  globalThis.TEST_HEADERS = new Headers();
+  globalThis.TEST_IDENTITY = null;
   for (const path of ['snapshot', 'document/anything', 'export'])
     assert.equal((await routes.GET(request(path))).status, 401);
-  globalThis.TEST_HEADERS = new Headers({
-    'oai-authenticated-user-id': 'stranger',
-    'oai-authenticated-user-email': 'stranger@example.test',
-  });
+  globalThis.TEST_IDENTITY = { userId: 'stranger', email: 'stranger@example.test', displayName: 'Stranger' };
   assert.equal((await routes.GET(request('snapshot'))).status, 403);
 });
 test('Viewer cannot upload, decide, sync or change staff access; CSRF is rejected', async () => {
@@ -373,10 +399,7 @@ test('Viewer cannot upload, decide, sync or change staff access; CSRF is rejecte
     )
     .bind('viewer', 'view@example.test', 'Viewer', 1, s.now())
     .run();
-  globalThis.TEST_HEADERS = new Headers({
-    'oai-authenticated-user-id': 'viewer',
-    'oai-authenticated-user-email': 'view@example.test',
-  });
+  globalThis.TEST_IDENTITY = { userId: 'viewer', email: 'view@example.test', displayName: 'Viewer' };
   for (const path of ['row/anything', 'review', 'sync', 'users'])
     assert.equal((await routes.POST(request(path, {}))).status, 403);
   const bad = new Request('https://fleet.example/api/fleet/review', {
@@ -773,7 +796,7 @@ test('pending document filters apply before pagination and row evidence loads on
   assert.equal(detail.row.documentId, doc.documentId);
   assert.ok(detail.row.original);
   assert.ok(detail.row.corrected);
-  globalThis.TEST_HEADERS = new Headers();
+  globalThis.TEST_IDENTITY = null;
   for (const path of [
     'detail/row?id=' + rowId,
     'detail/trip?id=t1',

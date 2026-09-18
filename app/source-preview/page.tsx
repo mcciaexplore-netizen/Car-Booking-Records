@@ -14,7 +14,7 @@ export default async function SourcePreview() {
         className="notice"
         style={{ margin: 0, borderRadius: 0, padding: '14px 24px' }}
       >
-        <a href="/">← Back to Fleet Desk</a> · Historical supplied-file preview.
+        <a href="/">← Back to Car Booking Details</a> · Historical supplied-file preview.
         These records are separate from confirmed operational totals.
       </div>
       <SampleDashboard input={input as unknown as SampleInput} />

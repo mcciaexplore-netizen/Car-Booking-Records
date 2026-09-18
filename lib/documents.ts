@@ -164,7 +164,7 @@ export async function beginExtraction(docId: string, actor: string) {
           'Ocp-Apim-Subscription-Key': e.AZURE_DOCUMENT_KEY!,
           'Content-Type': doc.mime,
         },
-        body: original.body,
+        body: await new Response(original.body).arrayBuffer(),
         signal: AbortSignal.timeout(30000),
       },
     );

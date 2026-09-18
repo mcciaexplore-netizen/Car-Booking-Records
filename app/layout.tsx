@@ -4,6 +4,7 @@ import './globals.css';
 import './fleet.css';
 import './workspace.css';
 import './fleet-upgrade.css';
+import './mccia-brand.css';
 
 const geistSans = Geist({
   variable: '--font-geist-sans',
@@ -16,7 +17,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'Fleet Desk | Company Car Register',
+  title: 'Car Booking Details | MCCIA',
   description:
     'Private company vehicle records, register review and evidence-based booking reconciliation.',
 };

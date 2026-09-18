@@ -168,3 +168,40 @@ export const apiBudget = sqliteTable('api_budget', {
   day: text().primaryKey(),
   calls: integer().notNull().default(0),
 });
+export {
+  user as authUser,
+  session as authSession,
+  account as authAccount,
+  verification as authVerification,
+  rateLimit as authRateLimit,
+} from './auth-schema';
+export const staffInvitations = sqliteTable(
+  'staff_invitations',
+  {
+    id: text().primaryKey(),
+    email: text().notNull(),
+    tokenHash: text().notNull().unique(),
+    createdBy: text().notNull(),
+    createdAt: text().notNull(),
+    expiresAt: text().notNull(),
+    consumedAt: text(),
+  },
+  (table) => [index('staff_invitation_email').on(table.email)],
+);
+export const uploadIntents = sqliteTable(
+  'upload_intents',
+  {
+    id: text().primaryKey(),
+    actor: text().notNull(),
+    name: text().notNull(),
+    mime: text().notNull(),
+    size: integer().notNull(),
+    kind: text().notNull(),
+    objectKey: text().notNull().unique(),
+    createdAt: text().notNull(),
+    expiresAt: text().notNull(),
+    tokenIssuedAt: text(),
+    result: text(),
+  },
+  (table) => [index('upload_intent_actor').on(table.actor, table.createdAt)],
+);

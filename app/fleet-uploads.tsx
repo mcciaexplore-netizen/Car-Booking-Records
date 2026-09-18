@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { api, Badge, Picker, Field, date, fmt } from './fleet-ui';
 import { Pager } from './fleet-records';
+import { upload as uploadBlob } from '@vercel/blob/client';
 
 type QueueItem = {
   id: string;
@@ -55,16 +56,36 @@ export function UploadWorkspace({
       if (!item.file.size || item.file.size > 10 * 1024 * 1024)
         throw Error('Each file must be nonempty and no larger than 10 MB.');
       update({ state: 'Uploading' });
-      const form = new FormData();
-      form.set('file', item.file);
-      form.set('kind', item.kind);
-      const response = await fetch('/api/fleet/upload', {
-        method: 'POST',
-        body: form,
+      const sendMetadata = async <T,>(input: object): Promise<T> => {
+        const response = await fetch('/api/uploads', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(input),
+        });
+        const result = (await response.json()) as T & { error?: string };
+        if (!response.ok)
+          throw Error(result.error ?? 'Upload failed. Retry this file.');
+        return result;
+      };
+      const intent = await sendMetadata<{ pathname: string; intentId: string }>(
+        {
+          action: 'prepare',
+          name: item.file.name,
+          mime: item.file.type,
+          size: item.file.size,
+          kind: item.kind,
+        },
+      );
+      await uploadBlob(intent.pathname, item.file, {
+        access: 'private',
+        handleUploadUrl: '/api/uploads',
+        contentType: item.file.type,
       });
-      const result = (await response.json()) as any;
-      if (!response.ok)
-        throw Error(result.error ?? 'Upload failed. Retry this file.');
+      const result = await sendMetadata<{
+        documentId: string;
+        duplicate: boolean;
+        deleted?: boolean;
+      }>({ action: 'finalize', intentId: intent.intentId });
       update({
         state: result.deleted
           ? 'Duplicate — original removed by retention policy'

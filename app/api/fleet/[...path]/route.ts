@@ -584,6 +584,8 @@ export async function POST(request: Request) {
             'INSERT INTO users(id,email,role,active,createdAt) VALUES(?,?,?,?,?) ON CONFLICT(email) DO UPDATE SET role=excluded.role,active=excluded.active',
           )
           .bind(id(), email, input.role, input.active === false ? 0 : 1, now()),
+        db().prepare('DELETE FROM auth_session WHERE userId IN (SELECT id FROM auth_user WHERE email=?) AND ?=0')
+          .bind(email, input.active === false ? 0 : 1),
         audit(
           email,
           'access-change',
@@ -593,6 +595,22 @@ export async function POST(request: Request) {
         ),
       ]);
       return json({ saved: true });
+    }
+    if (route === 'invite') {
+      const email = String(input.email ?? '').trim().toLowerCase();
+      const staff = await first('SELECT * FROM users WHERE email=? AND active=1', email);
+      if (!staff) throw new HttpError(400, 'Save an active staff role for this email first.');
+      if (await first('SELECT id FROM auth_user WHERE email=?', email))
+        throw new HttpError(409, 'This person already has a sign-in account. Invitations do not reset passwords.');
+      const code = id().replaceAll('-', '') + id().replaceAll('-', '');
+      const stamp = now(), expiresAt = new Date(Date.now() + 24 * 3600000).toISOString();
+      await db().batch([
+        db().prepare('UPDATE staff_invitations SET consumedAt=? WHERE email=? AND consumedAt IS NULL').bind(stamp, email),
+        db().prepare('INSERT INTO staff_invitations(id,email,tokenHash,createdBy,createdAt,expiresAt) VALUES(?,?,?,?,?,?)')
+          .bind(id(), email, await hash(code), user.email, stamp, expiresAt),
+        audit(email, 'invitation-issued', user.email, null, { expiresAt }),
+      ]);
+      return json({ code, expiresAt });
     }
     if (route === 'purge') {
       if (typeof input.reason !== 'string' || input.reason.trim().length < 5)

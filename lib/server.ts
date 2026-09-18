@@ -1,9 +1,10 @@
-import { env } from 'cloudflare:workers';
+import { platformRuntime } from './platform';
+import type { Database, DocumentStore } from './platform-types';
 import { getChatGPTUser } from '../app/chatgpt-auth';
 import type { Role } from './domain';
 export type Runtime = {
-  DB: D1Database;
-  DOCUMENTS: R2Bucket;
+  DB: Database;
+  DOCUMENTS: DocumentStore;
   ZOHO_CLIENT_ID?: string;
   ZOHO_CLIENT_SECRET?: string;
   ZOHO_REFRESH_TOKEN?: string;
@@ -18,21 +19,7 @@ export type Runtime = {
   FLEET_UX_FIXTURES?: string;
 };
 export const runtime = () => {
-  const bindings = env as unknown as Runtime;
-  // Fixture mode exists only in the development Vite configuration. Strip all
-  // integration secrets even if the developer has a real local connection.
-  if (
-    (import.meta as ImportMeta & { env: { DEV: boolean } }).env.DEV &&
-    bindings.FLEET_UX_FIXTURES === '1'
-  ) {
-    return {
-      DB: bindings.DB,
-      DOCUMENTS: bindings.DOCUMENTS,
-      FLEET_UX_FIXTURES: '1',
-      FLEET_ADMIN_EMAIL: 'seedy@sites.test',
-    } as Runtime;
-  }
-  return bindings;
+  return platformRuntime();
 };
 export function db() {
   const d = runtime().DB;
@@ -106,7 +93,7 @@ export async function member(
 ) {
   const user = await getChatGPTUser();
   if (!user)
-    throw new HttpError(401, 'Sign in with ChatGPT to access Fleet Desk.');
+    throw new HttpError(401, 'Sign in to access Car Booking Details.');
   let record = await first(
     'SELECT * FROM users WHERE email=?',
     user.email.toLowerCase(),
@@ -127,7 +114,7 @@ export async function member(
   if (!record || !record.active)
     throw new HttpError(
       403,
-      'Your account has not been granted Fleet Desk access. Contact the administrator.',
+      'Your account has not been granted Car Booking Details access. Contact the administrator.',
     );
   assertRole(record.role, allowed);
   return {

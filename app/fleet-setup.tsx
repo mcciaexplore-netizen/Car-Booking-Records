@@ -691,14 +691,14 @@ const ROLE_COPY: Record<string, string> = {
 export function StaffAccess({ settings, refresh, run, busy }: any) {
   const [email, setEmail] = useState(''),
     [role, setRole] = useState('Viewer'),
-    [active, setActive] = useState(true);
+    [active, setActive] = useState(true),
+    [invitation, setInvitation] = useState<{code: string; expiresAt: string} | null>(null);
   return (
     <section className="panel configuration">
       <h2>Staff access</h2>
       <p className="muted">
-        A staff member needs both access to the private site and an active Fleet
-        Desk role. Record, attachment and export permissions are enforced by the
-        server.
+        Staff need an invitation, a Car Booking Details password and an active role.
+        Record, attachment and export permissions are enforced by the server.
       </p>
       <DataTable
         headers={['Email', 'Role', 'Access', 'Edit']}
@@ -732,7 +732,7 @@ export function StaffAccess({ settings, refresh, run, busy }: any) {
           void run(async () => {
             await api('users', { email, role, active });
             await refresh();
-          }, 'Staff role updated. Private site sharing remains a separate access requirement.');
+          }, 'Staff role updated. New staff also need an invitation to activate their sign-in.');
         }}
       >
         <Field label="Staff email">
@@ -742,6 +742,7 @@ export function StaffAccess({ settings, refresh, run, busy }: any) {
             value={email}
             onChange={(e) => {
               setEmail(e.target.value);
+              setInvitation(null);
               const existing = settings.users.find(
                 (u: any) =>
                   u.email.toLowerCase() === e.target.value.toLowerCase(),
@@ -781,7 +782,18 @@ export function StaffAccess({ settings, refresh, run, busy }: any) {
           {email || 'this account'}.
         </p>
         <Button disabled={busy}>Save access</Button>
+        <Button type="button" variant="outline" disabled={busy || !email || !active} onClick={() => void run(async () => {
+          setInvitation(await api('invite', { email }));
+        }, 'Invitation created. No email has been sent.')}>
+          Create invitation for saved staff member
+        </Button>
       </form>
+      {invitation && <section className="notice" aria-label="Private invitation">
+        <p>Share this code privately with {email}. It expires {new Date(invitation.expiresAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })} IST.</p>
+        <Input aria-label="Invitation code" readOnly value={invitation.code} onFocus={event => event.currentTarget.select()} />
+        <p>The recipient selects “I have an invitation” on the sign-in screen. No notification has been sent.</p>
+        <Button variant="ghost" onClick={() => setInvitation(null)}>Hide code</Button>
+      </section>}
       <details>
         <summary>Compare role capabilities</summary>
         <dl className="role-matrix">

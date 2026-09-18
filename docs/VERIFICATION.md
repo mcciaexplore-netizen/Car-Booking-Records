@@ -1,5 +1,7 @@
 # Verification and outstanding inputs
 
+Current Vercel migration and MCCIA branding results: [VERCEL-VERIFICATION.md](VERCEL-VERIFICATION.md). The deployment has not yet been published; results below describe earlier versions.
+
 ## Token setup utility — 9 September 2026
 
 The separate Windows administrator utility `scripts/zoho_token_exchange.py` passed all **18 tests** with `python -m unittest discover -s tests -p test_zoho_token_exchange.py -v`. Network calls were mocked; credentials were test fixtures. The tests performed real Windows DPAPI encryption/decryption and ciphertext tamper rejection, and checked regional endpoints, POST payload, timeouts, redirects, OAuth errors, missing tokens, malformed/oversized responses, no automatic retry, hidden-input failure, secret-free output, existing-bundle preservation and failed-exchange cleanup. The command-line help and source whitespace check passed. After an empty legacy bundle was reported, additional checks verified a clear empty-file message, no final bundle during input, cancellation cleanup, and retention of recoverable encrypted credentials if finalization fails.

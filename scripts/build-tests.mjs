@@ -12,10 +12,11 @@ await build({
     {
       name: 'test-only-platform-adapters',
       setup(b) {
-        b.onResolve({ filter: /^cloudflare:workers$/ }, () => ({
+        b.onResolve({ filter: /^\.\/platform$/ }, () => ({
           path: 'runtime',
           namespace: 'test',
         }));
+        b.onResolve({ filter: /chatgpt-auth$/ }, () => ({ path: 'identity', namespace: 'test' }));
         b.onResolve({ filter: /^next\/headers$/ }, () => ({
           path: 'headers',
           namespace: 'test',
@@ -27,7 +28,9 @@ await build({
         b.onLoad({ filter: /.*/, namespace: 'test' }, (args) => ({
           contents:
             args.path === 'runtime'
-              ? `export const env=new Proxy({}, {get:(_,k)=>globalThis.TEST_ENV[k]});`
+              ? `export const platformRuntime=()=>globalThis.TEST_ENV;`
+              : args.path === 'identity'
+                ? `export async function getChatGPTUser(){return globalThis.TEST_IDENTITY;}`
               : args.path === 'headers'
                 ? `export async function headers(){return globalThis.TEST_HEADERS;}`
                 : `export function redirect(){throw Error('Unexpected test redirect');}`,
