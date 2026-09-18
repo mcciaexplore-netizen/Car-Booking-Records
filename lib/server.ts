@@ -2,6 +2,7 @@ import { platformRuntime } from './platform';
 import type { Database, DocumentStore } from './platform-types';
 import { getChatGPTUser } from '../app/chatgpt-auth';
 import type { Role } from './domain';
+import { publicAccessEnabled } from './access';
 export type Runtime = {
   DB: Database;
   DOCUMENTS: DocumentStore;
@@ -91,9 +92,13 @@ export function assertRole(role: Role, allowed: Role[]) {
 export async function member(
   allowed: Role[] = ['Administrator', 'Manager', 'Register operator', 'Viewer'],
 ) {
+  if (publicAccessEnabled())
+    throw new HttpError(
+      403,
+      'Changes and administration are unavailable in the public dashboard.',
+    );
   const user = await getChatGPTUser();
-  if (!user)
-    throw new HttpError(401, 'Sign in to access Car Booking Details.');
+  if (!user) throw new HttpError(401, 'Sign in to access Car Booking Details.');
   let record = await first(
     'SELECT * FROM users WHERE email=?',
     user.email.toLowerCase(),
@@ -128,6 +133,17 @@ export function sameOrigin(request: Request) {
   const origin = request.headers.get('origin');
   if (!origin || origin !== new URL(request.url).origin)
     throw new HttpError(403, 'Request origin is not allowed.');
+}
+/** Public reading never creates a staff account or grants write permissions. */
+export async function readAccess() {
+  if (publicAccessEnabled())
+    return {
+      id: 'public',
+      email: '',
+      name: 'Public access',
+      role: 'Viewer' as Role,
+    };
+  return member();
 }
 export async function body(request: Request) {
   if (!request.headers.get('content-type')?.includes('application/json'))

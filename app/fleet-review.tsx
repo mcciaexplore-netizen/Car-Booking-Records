@@ -857,7 +857,7 @@ export function RecordDetail({ nav, canEdit, canReview, refresh }: any) {
           </DialogTitle>
           <DialogDescription>
             {error ||
-              'Retrieving this record and its authorized source references.'}
+              'Retrieving this record and its source references.'}
           </DialogDescription>
           {error && <Button onClick={() => void load()}>Retry</Button>}
           <Button variant="outline" onClick={nav.close}>

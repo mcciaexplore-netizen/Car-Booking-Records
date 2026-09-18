@@ -1,2 +1,6 @@
 export const dynamic = 'force-dynamic';
-export { default } from './fleet-dashboard';
+import Dashboard from './fleet-dashboard';
+import { publicAccessEnabled } from '../lib/access';
+export default function Page() {
+  return <Dashboard publicAccess={publicAccessEnabled()} />;
+}

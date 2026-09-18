@@ -18,12 +18,17 @@ const { default: handler } = await import(
 // This smoke check intentionally has no service credentials or company data session.
 delete process.env.BETTER_AUTH_SECRET;
 delete process.env.TURSO_DATABASE_URL;
+delete process.env.FLEET_ACCESS_MODE;
 for (const [path, status, text] of [
-  ['/', 200, 'Car Booking Details'],
-  ['/login', 200, 'mccia-logo-source.png'],
-  ['/api/fleet/snapshot', 401, 'Sign in'],
-  ['/api/fleet/historical-export', 401, 'Sign in'],
-  ['/api/fleet/document/private-original', 401, 'Sign in'],
+  ['/', 200, 'Public dashboard'],
+  ['/login', 307, ''],
+  ['/logout', 307, ''],
+  ['/source-preview', 200, 'Historical supplied-file preview'],
+  ['/api/fleet/snapshot', 503, 'Database is not provisioned'],
+  ['/api/fleet/historical-export', 200, ''],
+  ['/api/fleet/document/private-original', 503, 'Database is not provisioned'],
+  ['/api/fleet/settings', 403, 'unavailable in the public dashboard'],
+  ['/api/auth/get-session', 404, 'Accounts are disabled'],
   ['/missing-page-for-smoke-check', 404, ''],
 ]) {
   const response = await handler.fetch(
@@ -36,9 +41,30 @@ for (const [path, status, text] of [
     {},
   );
   assert.equal(response.status, status, path);
-  assert.ok((await response.text()).includes(text), path);
+  const html = await response.text();
+  assert.ok(html.includes(text), path);
+  if (status === 307) assert.equal(response.headers.get('location'), '/');
+  if (path === '/') {
+    assert.ok(
+      !/href="\/(?:login|logout)/.test(html),
+      'Public dashboard shows account links.',
+    );
+    assert.ok(
+      !html.includes('Sign-in required'),
+      'Public dashboard shows a sign-in prompt.',
+    );
+  }
   console.log(`Verified ${path}: ${status}`);
 }
+process.env.FLEET_ACCESS_MODE = 'private';
+for (const path of ['snapshot', 'historical-export', 'document/anything']) {
+  const response = await handler.fetch(
+    new Request('https://example.test/api/fleet/' + path),
+    {},
+  );
+  assert.equal(response.status, 401, 'Private mode: ' + path);
+}
+delete process.env.FLEET_ACCESS_MODE;
 async function inventory(dir) {
   let bytes = 0;
   for (const entry of await readdir(dir, { withFileTypes: true })) {

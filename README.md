@@ -1,8 +1,10 @@
-python "C:\Users\Aarushi Gupta\Documents\ChatGPT\MCCIA Car ussage\scripts\zoho_token_exchange.py" --dc IN# Fleet Desk
+# Car Booking Details
 
-External company vehicle dashboard upgraded from the existing Fleet Desk prototype. Preserves its visual system, navigation, vehicle panels and register workflows while replacing sample state with authenticated D1/R2 storage.
+External company vehicle dashboard upgraded from the existing Fleet Desk prototype. Preserves its visual system, navigation, vehicle panels and register workflows. The current Vercel migration uses Turso/libSQL and private Blob storage; provisioning and production data transfer remain unverified.
 
-Includes server-enforced roles, read-only regional Zoho OAuth and metadata discovery, paginated and incremental sync, private uploads, duplicate detection, source review, conservative reconciliation, nine KPIs, filtered registers, CSV exports and internal alerts.
+Public viewing without sign-in is the owner-selected default: records, original images and exports are accessible to everyone with the URL. Edits, uploads, approval decisions and administration are disabled in public mode. Set `FLEET_ACCESS_MODE=private` on a protected operator deployment to restore accounts and staff actions. See [Vercel access and deployment setup](docs/VERCEL-DEPLOYMENT.md).
+
+Includes server-enforced roles in private mode, read-only regional Zoho OAuth and metadata discovery, paginated and incremental sync, private uploads, duplicate detection, source review, conservative reconciliation, nine KPIs, filtered registers, CSV exports and internal alerts.
 
 **No live Zoho data, sample fleet records or real OCR results are displayed.** OAuth account access, actual field mappings, register samples, OCR credentials and unattended scheduling still need setup and verification. Zoho write-back and external notifications are disabled.
 
@@ -18,4 +20,4 @@ Use Node 24. Run `npm ci`, `npm test`, `npm run typecheck`, `npm run build`. Sta
 
 The application page is `app/fleet-dashboard.tsx`; server endpoints are in `app/api/fleet/[...path]/route.ts`. The old prototype modules are not imported by the current page. Tests use isolated fixtures and an in-memory SQLite adapter, never company data. Local emulator state and `.dev.vars` are ignored by Git; production secrets belong in the hosting secret manager.
 
-The newer supplied-file reconciliation preview is preserved at /source-preview behind authentication; its historical rows are not included in confirmed operational totals. The original fictitious workflow remains explicitly separated at /demo.
+The newer supplied-file reconciliation preview is preserved at /source-preview under the selected access mode; its historical rows are not included in confirmed operational totals. The original fictitious workflow remains explicitly separated at /demo.

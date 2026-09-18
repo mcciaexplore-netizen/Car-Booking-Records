@@ -28,6 +28,7 @@ import {
   AlertCircle,
   LogOut,
   LockKeyhole,
+  Globe,
   Bell,
   ExternalLink,
   ArrowRight,
@@ -172,7 +173,11 @@ function WorkspaceNavigation({
     </nav>
   );
 }
-export default function Dashboard() {
+export default function Dashboard({
+  publicAccess = false,
+}: {
+  publicAccess?: boolean;
+}) {
   const nav = useFleetNavigation(NAV.map(([v]) => v));
   const view = nav.view as View,
     filters = nav.filters;
@@ -344,7 +349,7 @@ export default function Dashboard() {
   const exportQuery = new URLSearchParams(query);
   exportQuery.set('type', currentType);
   const connectionLabel = !data
-    ? 'Awaiting authorized access'
+    ? 'Loading records'
     : fresh?.sync?.status === 'failed'
       ? 'Sync failed · showing last complete import'
       : fresh?.sync?.status === 'retrying'
@@ -384,7 +389,12 @@ export default function Dashboard() {
       </a>
       <Sidebar className="fleet-sidebar">
         <SidebarHeader>
-          <div className="brand mccia-brand"><McciaLogo /><div className="brand-title">Car Booking Details<small>MCCIA · Vehicle operations</small></div></div>
+          <div className="brand mccia-brand">
+            <McciaLogo />
+            <div className="brand-title">
+              Car Booking Details<small>MCCIA · Vehicle operations</small>
+            </div>
+          </div>
         </SidebarHeader>
         <SidebarContent>
           <WorkspaceNavigation
@@ -411,18 +421,20 @@ export default function Dashboard() {
           </a>
           <div className="profile">
             <span className="avatar">
-              <LockKeyhole size={16} />
+              {publicAccess ? <Globe size={16} /> : <LockKeyhole size={16} />}
             </span>
             <div>
-              {data?.user?.name ?? 'Private workspace'}
-              <small>{role ?? 'Sign-in required'}</small>
+              {publicAccess
+                ? 'Public access'
+                : (data?.user?.name ?? 'Private workspace')}
+              <small>
+                {publicAccess
+                  ? 'View records without an account'
+                  : (role ?? 'Sign-in required')}
+              </small>
             </div>
-            {data && (
-              <a
-                href="/logout"
-                target="_top"
-                aria-label="Sign out"
-              >
+            {data && !publicAccess && (
+              <a href="/logout" target="_top" aria-label="Sign out">
                 <LogOut size={16} />
               </a>
             )}
@@ -432,12 +444,13 @@ export default function Dashboard() {
       <main className="workspace" id="fleet-main" tabIndex={-1}>
         <header className="topbar">
           <div className="flex items-center gap-3">
-            <SidebarTrigger /><McciaLogo className="mccia-header-logo" />
+            <SidebarTrigger />
+            <McciaLogo className="mccia-header-logo" />
             <span className="header-current-view">{view}</span>
           </div>
           <span className="demo-label">
-            <LockKeyhole size={13} />
-            Private workspace · IST
+            {publicAccess ? <Globe size={13} /> : <LockKeyhole size={13} />}
+            {publicAccess ? 'Public dashboard' : 'Private workspace'} · IST
           </span>
         </header>
         <div className="page-content">
@@ -462,7 +475,7 @@ export default function Dashboard() {
                   <a
                     className="export-link"
                     href={'/api/fleet/export?' + exportQuery}
-                    title="Export all authorized matching records, including other pages"
+                    title="Export all matching records, including other pages"
                   >
                     <Download size={16} />
                     Export CSV · {data.counts[currentType]}
@@ -544,22 +557,26 @@ export default function Dashboard() {
           )}
           {!data && !loading && (
             <section className="panel sign-in">
-              <LockKeyhole size={32} />
+              <Database size={32} />
               <h2>
-                {auth === 403
-                  ? 'Access has not been granted'
-                  : auth === 401
-                    ? 'Sign in to Car Booking Details'
-                    : 'Records are temporarily unavailable'}
+                {publicAccess
+                  ? 'Records are temporarily unavailable'
+                  : auth === 403
+                    ? 'Access has not been granted'
+                    : auth === 401
+                      ? 'Sign in to Car Booking Details'
+                      : 'Records are temporarily unavailable'}
               </h2>
               <p>
-                {auth === 403
-                  ? 'Ask the Car Booking Details administrator to grant your account access.'
-                  : auth === 401
-                    ? 'Use an authorized account to view company records and attachments.'
-                    : 'Retry the connection. Saved records have not been removed.'}
+                {publicAccess
+                  ? 'Retry the connection. If setup is incomplete, the site owner needs to connect the database.'
+                  : auth === 403
+                    ? 'Ask the Car Booking Details administrator to grant your account access.'
+                    : auth === 401
+                      ? 'Use an authorized account to view company records and attachments.'
+                      : 'Retry the connection. Saved records have not been removed.'}
               </p>
-              {auth === 401 && (
+              {auth === 401 && !publicAccess && (
                 <a
                   className="signin-link"
                   href={
@@ -862,6 +879,7 @@ export default function Dashboard() {
               {
                 <div hidden={view !== 'Register uploads'}>
                   <UploadWorkspace
+                    publicAccess={publicAccess}
                     data={data}
                     nav={nav}
                     canUpload={canUpload}

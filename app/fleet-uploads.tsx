@@ -19,6 +19,7 @@ export function UploadWorkspace({
   data,
   nav,
   canUpload,
+  publicAccess,
   refresh,
   run,
   busy,
@@ -138,17 +139,29 @@ export function UploadWorkspace({
           setDragging(false);
           if (canUpload) void addFiles(Array.from(e.dataTransfer.files));
         }}
-        aria-label="Upload register documents"
+        aria-label={
+          canUpload ? 'Upload register documents' : 'Register documents'
+        }
       >
         <div>
           <Upload size={26} />
-          <h2>Add original registers and receipts</h2>
-          <p>JPEG, PNG or PDF · up to 10 MB each · originals stay private</p>
-          <p className="extraction-availability">
-            {data.extractionAvailable
-              ? 'Automated extraction is configured. Confirm its draft rows before they count as records.'
-              : 'Automated extraction is not configured. Upload an original, then add and review rows manually.'}
+          <h2>
+            {canUpload
+              ? 'Add original registers and receipts'
+              : 'Original registers and receipts'}
+          </h2>
+          <p>
+            {publicAccess
+              ? 'View original files and the rows extracted from them. Uploading and corrections are unavailable in the public dashboard.'
+              : 'JPEG, PNG or PDF · up to 10 MB each · originals stay private'}
           </p>
+          {canUpload && (
+            <p className="extraction-availability">
+              {data.extractionAvailable
+                ? 'Automated extraction is configured. Confirm its draft rows before they count as records.'
+                : 'Automated extraction is not configured. Upload an original, then add and review rows manually.'}
+            </p>
+          )}
         </div>
         {canUpload && (
           <div className="upload-controls">
@@ -266,7 +279,9 @@ export function UploadWorkspace({
             <p>
               {nav.filters.metric === 'pending'
                 ? 'Choose All documents or another page to inspect saved originals.'
-                : 'Choose a register image or PDF above. Its original will remain linked to every reviewed row.'}
+                : canUpload
+                  ? 'Choose a register image or PDF above. Its original will remain linked to every reviewed row.'
+                  : 'Original registers will appear here when the site owner adds them.'}
             </p>
           </div>
         )}

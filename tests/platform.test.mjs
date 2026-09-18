@@ -10,10 +10,12 @@ import {
   uploads,
   uploadRoute,
   routes,
+  authRoute,
 } from '../work/platform-tests.mjs';
 
 // Dedicated in-memory libSQL instance. Never reads environment files or production secrets.
 const base = 'http://localhost:3456';
+process.env.FLEET_ACCESS_MODE = 'private';
 process.env.TURSO_DATABASE_URL = 'file::memory:';
 delete process.env.TURSO_AUTH_TOKEN;
 delete process.env.VERCEL;
@@ -85,37 +87,33 @@ void test('forged hosting headers and unsigned cookies cannot read records, orig
   }
 });
 void test('registration requires an invitation; bootstrap creates only the designated owner', async () => {
-  const rejected = await auth
-    .fleetAuth()
-    .handler(
-      request(
-        'sign-up/email',
-        {
-          email: 'intruder@example.test',
-          name: 'Intruder',
-          password: 'long-password-test',
-        },
-        {
-          headers: { 'x-fleet-invitation': process.env.FLEET_BOOTSTRAP_TOKEN },
-        },
-      ),
-    );
+  const rejected = await auth.fleetAuth().handler(
+    request(
+      'sign-up/email',
+      {
+        email: 'intruder@example.test',
+        name: 'Intruder',
+        password: 'long-password-test',
+      },
+      {
+        headers: { 'x-fleet-invitation': process.env.FLEET_BOOTSTRAP_TOKEN },
+      },
+    ),
+  );
   assert.equal(rejected.status, 403);
-  const accepted = await auth
-    .fleetAuth()
-    .handler(
-      request(
-        'sign-up/email',
-        {
-          email: 'owner@example.test',
-          name: 'Owner',
-          password: 'long-password-test',
-        },
-        {
-          headers: { 'x-fleet-invitation': process.env.FLEET_BOOTSTRAP_TOKEN },
-        },
-      ),
-    );
+  const accepted = await auth.fleetAuth().handler(
+    request(
+      'sign-up/email',
+      {
+        email: 'owner@example.test',
+        name: 'Owner',
+        password: 'long-password-test',
+      },
+      {
+        headers: { 'x-fleet-invitation': process.env.FLEET_BOOTSTRAP_TOKEN },
+      },
+    ),
+  );
   assert.equal(accepted.status, 200, await accepted.clone().text());
   ownerCookie = cookie(accepted);
   assert.ok(ownerCookie.includes('session_token='));
@@ -265,4 +263,32 @@ void test('logout revokes the server session', async () => {
   assert.equal(result.status, 200);
   globalThis.PLATFORM_HEADERS = new Headers({ cookie: ownerCookie });
   assert.equal(await identity.getChatGPTUser(), null);
+});
+void test('public mode disables account endpoints and upload authorization with no session', async () => {
+  process.env.FLEET_ACCESS_MODE = 'public';
+  globalThis.PLATFORM_HEADERS = new Headers();
+  try {
+    for (const path of ['sign-in/email', 'sign-up/email', 'sign-out'])
+      assert.equal((await authRoute.POST(request(path))).status, 404, path);
+    assert.equal(
+      (await authRoute.GET(new Request(base + '/api/auth/get-session'))).status,
+      404,
+    );
+    assert.equal(
+      (await routes.GET(new Request(base + '/api/fleet/snapshot'))).status,
+      200,
+    );
+    for (const action of ['prepare', 'finalize']) {
+      const response = await uploadRoute.POST(
+        new Request(base + '/api/uploads', {
+          method: 'POST',
+          headers: { origin: base, 'content-type': 'application/json' },
+          body: JSON.stringify({ action }),
+        }),
+      );
+      assert.equal(response.status, 403, action);
+    }
+  } finally {
+    process.env.FLEET_ACCESS_MODE = 'private';
+  }
 });

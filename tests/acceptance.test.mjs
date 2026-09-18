@@ -60,6 +60,7 @@ function makeDB() {
   };
 }
 beforeEach(() => {
+  process.env.FLEET_ACCESS_MODE = 'private';
   globalThis.TEST_ENV = {
     DB: makeDB(),
     FLEET_ADMIN_EMAIL: 'owner@example.test',
@@ -77,7 +78,11 @@ beforeEach(() => {
       },
     },
   };
-  globalThis.TEST_IDENTITY = { userId: 'owner-id', email: 'owner@example.test', displayName: 'Owner' };
+  globalThis.TEST_IDENTITY = {
+    userId: 'owner-id',
+    email: 'owner@example.test',
+    displayName: 'Owner',
+  };
   globalThis.fetch = realFetch;
 });
 const trip = (changes = {}) => ({
@@ -99,30 +104,73 @@ const trip = (changes = {}) => ({
 void test('private staged uploads over 4.5 MB finalize idempotently and duplicate content creates one document', async () => {
   const bytes = new Uint8Array(8 * 1024 * 1024);
   bytes.set(new TextEncoder().encode('%PDF-1.7'));
-  const metadata = { name: 'large-register.pdf', mime: 'application/pdf', size: bytes.length, kind: 'movement' };
-  const first = await uploadIntents.prepareUpload(metadata, 'owner@example.test');
+  const metadata = {
+    name: 'large-register.pdf',
+    mime: 'application/pdf',
+    size: bytes.length,
+    kind: 'movement',
+  };
+  const first = await uploadIntents.prepareUpload(
+    metadata,
+    'owner@example.test',
+  );
   await s.runtime().DOCUMENTS.put(first.pathname, bytes.buffer);
-  const saved = await uploadIntents.finalizeUpload(first.intentId, 'owner@example.test');
+  const saved = await uploadIntents.finalizeUpload(
+    first.intentId,
+    'owner@example.test',
+  );
   assert.equal(saved.duplicate, false);
-  assert.deepEqual(await uploadIntents.finalizeUpload(first.intentId, 'owner@example.test'), saved);
+  assert.deepEqual(
+    await uploadIntents.finalizeUpload(first.intentId, 'owner@example.test'),
+    saved,
+  );
   assert.equal(await s.runtime().DOCUMENTS.get(first.pathname), null);
-  const repeated = await uploadIntents.prepareUpload(metadata, 'owner@example.test');
+  const repeated = await uploadIntents.prepareUpload(
+    metadata,
+    'owner@example.test',
+  );
   await s.runtime().DOCUMENTS.put(repeated.pathname, bytes.buffer);
-  const duplicate = await uploadIntents.finalizeUpload(repeated.intentId, 'owner@example.test');
+  const duplicate = await uploadIntents.finalizeUpload(
+    repeated.intentId,
+    'owner@example.test',
+  );
   assert.equal(duplicate.documentId, saved.documentId);
   assert.equal(duplicate.duplicate, true);
   assert.equal((await s.all('SELECT * FROM documents')).length, 1);
   assert.equal((await s.all('SELECT * FROM actual_trips')).length, 0);
 });
 void test('staging finalization checks signatures and ownership; cleanup preserves originals', async () => {
-  const metadata = { name: 'fake.pdf', mime: 'application/pdf', size: 8, kind: 'movement' };
-  const intent = await uploadIntents.prepareUpload(metadata, 'owner@example.test');
-  await s.runtime().DOCUMENTS.put(intent.pathname, new TextEncoder().encode('bad-file').buffer);
-  await assert.rejects(uploadIntents.finalizeUpload(intent.intentId, 'other@example.test'), e => e.status === 404);
-  await assert.rejects(uploadIntents.finalizeUpload(intent.intentId, 'owner@example.test'), e => e.status === 415);
+  const metadata = {
+    name: 'fake.pdf',
+    mime: 'application/pdf',
+    size: 8,
+    kind: 'movement',
+  };
+  const intent = await uploadIntents.prepareUpload(
+    metadata,
+    'owner@example.test',
+  );
+  await s
+    .runtime()
+    .DOCUMENTS.put(
+      intent.pathname,
+      new TextEncoder().encode('bad-file').buffer,
+    );
+  await assert.rejects(
+    uploadIntents.finalizeUpload(intent.intentId, 'other@example.test'),
+    (e) => e.status === 404,
+  );
+  await assert.rejects(
+    uploadIntents.finalizeUpload(intent.intentId, 'owner@example.test'),
+    (e) => e.status === 415,
+  );
   assert.equal((await s.all('SELECT * FROM documents')).length, 0);
   await s.runtime().DOCUMENTS.put('originals/keep', 'evidence');
-  await s.db().prepare('UPDATE upload_intents SET expiresAt=?').bind('2000-01-01T00:00:00.000Z').run();
+  await s
+    .db()
+    .prepare('UPDATE upload_intents SET expiresAt=?')
+    .bind('2000-01-01T00:00:00.000Z')
+    .run();
   assert.equal(await uploadIntents.cleanupStaging(), 1);
   assert.equal(await s.runtime().DOCUMENTS.get(intent.pathname), null);
   assert.ok(await s.runtime().DOCUMENTS.get('originals/keep'));
@@ -387,8 +435,94 @@ test('unauthenticated and ungranted users cannot access records, images or expor
   globalThis.TEST_IDENTITY = null;
   for (const path of ['snapshot', 'document/anything', 'export'])
     assert.equal((await routes.GET(request(path))).status, 401);
-  globalThis.TEST_IDENTITY = { userId: 'stranger', email: 'stranger@example.test', displayName: 'Stranger' };
+  globalThis.TEST_IDENTITY = {
+    userId: 'stranger',
+    email: 'stranger@example.test',
+    displayName: 'Stranger',
+  };
   assert.equal((await routes.GET(request('snapshot'))).status, 403);
+});
+test('public dashboard reads real stored records, originals and matching CSV without an identity', async () => {
+  const { rowId, doc } = await draft();
+  await docs.saveRow(rowId, 1, trip(), true, 'operator');
+  delete process.env.FLEET_ACCESS_MODE;
+  globalThis.TEST_IDENTITY = null;
+  const response = await routes.GET(request('snapshot?employee=Employee+A'));
+  assert.equal(response.status, 200);
+  const state = await response.json();
+  assert.equal(state.user.role, 'Viewer');
+  assert.equal(state.user.name, 'Public access');
+  assert.equal(state.trips.length, 1);
+  assert.equal(state.metrics.trips, 1);
+  const exported = await routes.GET(request('export?employee=Employee+A'));
+  assert.equal(exported.status, 200);
+  assert.ok((await exported.text()).includes('Employee A'));
+  const filtered = await routes.GET(request('snapshot?employee=Missing'));
+  assert.equal((await filtered.json()).trips.length, 0);
+  const original = await routes.GET(request('document/' + doc.documentId));
+  assert.equal(original.status, 200);
+  assert.ok((await original.arrayBuffer()).byteLength > 0);
+  assert.equal(original.headers.get('cache-control'), 'private, no-store');
+  for (const path of [
+    'detail/trip?id=' + state.trips[0].id,
+    'history/' + rowId,
+    'alerts',
+    'historical-export',
+  ])
+    assert.equal((await routes.GET(request(path))).status, 200, path);
+  assert.equal((await s.all('SELECT * FROM users')).length, 0);
+});
+test('public dashboard cannot mutate data or reveal account and integration administration', async () => {
+  // Even a pre-existing valid administrator session must remain read-only in public mode.
+  await s.member();
+  process.env.FLEET_ACCESS_MODE = 'public';
+  const paths = [
+    'upload',
+    'extract/anything',
+    'poll/anything',
+    'draft/anything',
+    'row/anything',
+    'review',
+    'sync',
+    'users',
+    'invite',
+    'application',
+    'connection-test',
+  ];
+  for (const path of paths)
+    assert.equal((await routes.POST(request(path, {}))).status, 403, path);
+  assert.equal((await routes.GET(request('settings'))).status, 403);
+  assert.equal(
+    (await routes.GET(request('unknown-future-endpoint'))).status,
+    403,
+  );
+  await s
+    .db()
+    .batch([
+      s.audit('settings', 'private-setting', 'admin', null, {
+        marker: 'admin-only-value',
+      }),
+    ]);
+  const history = await routes.GET(request('history/settings'));
+  assert.equal(history.status, 404);
+  assert.ok(!(await history.text()).includes('admin-only-value'));
+  assert.equal((await s.all('SELECT * FROM documents')).length, 0);
+  assert.equal((await s.all('SELECT * FROM review_decisions')).length, 0);
+});
+test('public read access works without auth setup but still reports an unprovisioned database', async () => {
+  process.env.FLEET_ACCESS_MODE = 'public';
+  globalThis.TEST_IDENTITY = null;
+  globalThis.TEST_ENV.DB = undefined;
+  const response = await routes.GET(request('snapshot'));
+  assert.equal(response.status, 503);
+  assert.match((await response.json()).error, /Database is not provisioned/);
+});
+test('unknown access mode fails closed and private mode restores authentication', async () => {
+  globalThis.TEST_IDENTITY = null;
+  for (const mode of ['private', 'publci']) {
+    process.env.FLEET_ACCESS_MODE = mode;
+    assert.equal((await routes.GET(request('snapshot'))).status, 401);
+  }
 });
 test('Viewer cannot upload, decide, sync or change staff access; CSRF is rejected', async () => {
   await s.member();
@@ -399,7 +533,11 @@ test('Viewer cannot upload, decide, sync or change staff access; CSRF is rejecte
     )
     .bind('viewer', 'view@example.test', 'Viewer', 1, s.now())
     .run();
-  globalThis.TEST_IDENTITY = { userId: 'viewer', email: 'view@example.test', displayName: 'Viewer' };
+  globalThis.TEST_IDENTITY = {
+    userId: 'viewer',
+    email: 'view@example.test',
+    displayName: 'Viewer',
+  };
   for (const path of ['row/anything', 'review', 'sync', 'users'])
     assert.equal((await routes.POST(request(path, {}))).status, 403);
   const bad = new Request('https://fleet.example/api/fleet/review', {

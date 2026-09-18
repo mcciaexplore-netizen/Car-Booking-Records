@@ -1,9 +1,10 @@
 export const dynamic = 'force-dynamic';
 import Dashboard from '../dashboard';
 import { requireChatGPTUser } from '../chatgpt-auth';
-import { member } from '../../lib/server';
+import { readAccess } from '../../lib/server';
+import { publicAccessEnabled } from '../../lib/access';
 export default async function Demo() {
-  await requireChatGPTUser('/demo');
-  await member();
+  if (!publicAccessEnabled()) await requireChatGPTUser('/demo');
+  await readAccess();
   return <Dashboard />;
 }

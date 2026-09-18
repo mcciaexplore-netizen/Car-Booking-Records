@@ -3,6 +3,7 @@ import {
   limitedBody,
   json,
   member,
+  readAccess,
   sameOrigin,
   body,
   all,
@@ -43,10 +44,19 @@ export const dynamic = 'force-dynamic';
 const parts = (r: Request) =>
   new URL(r.url).pathname.split('/').filter(Boolean).slice(2);
 const WRITE: Role[] = ['Administrator', 'Manager', 'Register operator'];
+const READ_ROUTES = new Set([
+  'snapshot',
+  'detail',
+  'export',
+  'document',
+  'history',
+  'alerts',
+  'historical-export',
+]);
 export async function GET(request: Request) {
   return handle(async () => {
     const [route, recordId] = parts(request),
-      user = await member();
+      user = READ_ROUTES.has(route) ? await readAccess() : await member();
     const params = new URL(request.url).searchParams;
     if (route === 'historical-export') {
       const { historicalRows } = await import('../../../../lib/historical');
@@ -221,7 +231,20 @@ export async function GET(request: Request) {
         },
       });
     }
-    if (route === 'history')
+    if (route === 'history') {
+      if (user.id === 'public') {
+        const s = await snapshot();
+        const records = [
+          ...s.trips,
+          ...s.bookings,
+          ...s.fuel,
+          ...s.vehicles,
+          ...s.rows,
+          ...s.documents,
+        ];
+        if (!records.some((record) => record.id === recordId))
+          throw new HttpError(404, 'Record history not found.');
+      }
       return json({
         changes: await all(
           'SELECT * FROM change_history WHERE entityId=? ORDER BY createdAt',
@@ -236,6 +259,7 @@ export async function GET(request: Request) {
           recordId,
         ),
       });
+    }
     if (route === 'alerts')
       return json({
         alerts: await all(
@@ -584,7 +608,10 @@ export async function POST(request: Request) {
             'INSERT INTO users(id,email,role,active,createdAt) VALUES(?,?,?,?,?) ON CONFLICT(email) DO UPDATE SET role=excluded.role,active=excluded.active',
           )
           .bind(id(), email, input.role, input.active === false ? 0 : 1, now()),
-        db().prepare('DELETE FROM auth_session WHERE userId IN (SELECT id FROM auth_user WHERE email=?) AND ?=0')
+        db()
+          .prepare(
+            'DELETE FROM auth_session WHERE userId IN (SELECT id FROM auth_user WHERE email=?) AND ?=0',
+          )
           .bind(email, input.active === false ? 0 : 1),
         audit(
           email,
@@ -597,16 +624,36 @@ export async function POST(request: Request) {
       return json({ saved: true });
     }
     if (route === 'invite') {
-      const email = String(input.email ?? '').trim().toLowerCase();
-      const staff = await first('SELECT * FROM users WHERE email=? AND active=1', email);
-      if (!staff) throw new HttpError(400, 'Save an active staff role for this email first.');
+      const email = String(input.email ?? '')
+        .trim()
+        .toLowerCase();
+      const staff = await first(
+        'SELECT * FROM users WHERE email=? AND active=1',
+        email,
+      );
+      if (!staff)
+        throw new HttpError(
+          400,
+          'Save an active staff role for this email first.',
+        );
       if (await first('SELECT id FROM auth_user WHERE email=?', email))
-        throw new HttpError(409, 'This person already has a sign-in account. Invitations do not reset passwords.');
+        throw new HttpError(
+          409,
+          'This person already has a sign-in account. Invitations do not reset passwords.',
+        );
       const code = id().replaceAll('-', '') + id().replaceAll('-', '');
-      const stamp = now(), expiresAt = new Date(Date.now() + 24 * 3600000).toISOString();
+      const stamp = now(),
+        expiresAt = new Date(Date.now() + 24 * 3600000).toISOString();
       await db().batch([
-        db().prepare('UPDATE staff_invitations SET consumedAt=? WHERE email=? AND consumedAt IS NULL').bind(stamp, email),
-        db().prepare('INSERT INTO staff_invitations(id,email,tokenHash,createdBy,createdAt,expiresAt) VALUES(?,?,?,?,?,?)')
+        db()
+          .prepare(
+            'UPDATE staff_invitations SET consumedAt=? WHERE email=? AND consumedAt IS NULL',
+          )
+          .bind(stamp, email),
+        db()
+          .prepare(
+            'INSERT INTO staff_invitations(id,email,tokenHash,createdBy,createdAt,expiresAt) VALUES(?,?,?,?,?,?)',
+          )
           .bind(id(), email, await hash(code), user.email, stamp, expiresAt),
         audit(email, 'invitation-issued', user.email, null, { expiresAt }),
       ]);

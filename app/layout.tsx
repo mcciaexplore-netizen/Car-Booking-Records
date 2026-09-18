@@ -19,7 +19,7 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: 'Car Booking Details | MCCIA',
   description:
-    'Private company vehicle records, register review and evidence-based booking reconciliation.',
+    'MCCIA vehicle records, register evidence and booking reconciliation.',
 };
 
 export default function RootLayout({

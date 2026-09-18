@@ -4,10 +4,14 @@ Updated 18 September 2026. This replaces the Sites deployment procedure for the 
 
 ## Architecture
 
+The owner selected **public viewing without sign-in**. This is the default when `FLEET_ACCESS_MODE` is unset or `public`. Anyone with the URL can read company records, employee/driver details, original register images, review evidence and CSV exports, including the historical preview. `/login` and `/logout` redirect to `/`; account endpoints are disabled. Public access never creates an administrator or permits edits, uploads, review decisions or integration/staff settings. Previously signed-in administrators also receive read-only access in this mode. Scheduled synchronization still requires its server secret.
+
+To manage records, use a separately protected operator deployment with `FLEET_ACCESS_MODE=private`, or temporarily restore private mode. Configure its database/Blob connections intentionally; it must not be an untrusted PR preview. Private mode restores the existing invitation-based sign-in and role checks. Unknown nonempty mode values fail closed. Public mode does not require auth credentials, but records still require a configured database. No sample records replace a missing connection.
+
 - React/Vinext + Nitro generates Vercel Build Output API v3 routes, static assets and a Node 24 server function. `/` is a server route, not a static `index.html`.
 - Turso/libSQL provides durable SQLite-compatible records. The adapter preserves atomic batches and affected-row counts required by sync leases and correction conflict detection.
-- Better Auth provides password hashing, signed HttpOnly session cookies and database-backed rate limiting. Registration requires an email-bound, expiring, one-use invitation. The old Sites identity headers are ignored. Staff roles and active status are checked on every protected request.
-- A **private** Vercel Blob store holds originals and extraction results. Uploads go directly from the browser to a scoped staging path; authenticated finalization validates size, file signature and SHA-256 before creating records. This supports 10 MB uploads without routing the file through Vercel's 4.5 MB request limit. Private originals are streamed through the authenticated attachment route.
+- In optional private mode, Better Auth provides password hashing, signed HttpOnly session cookies and database-backed rate limiting. Registration requires an email-bound, expiring, one-use invitation. The old Sites identity headers are ignored. Staff roles and active status are checked on every protected request.
+- A **private** Vercel Blob store holds originals and extraction results. Uploads in private mode go directly from the browser to a scoped staging path; authenticated finalization validates size, file signature and SHA-256 before creating records. This supports 10 MB uploads without routing the file through Vercel's 4.5 MB request limit. The attachment route streams originals publicly in public mode and requires staff access in private mode. Storage tokens and direct object URLs are never exposed.
 - Existing Zoho read-only synchronization, approval reconciliation, review history and Azure extraction logic are preserved. No actual provider connection is asserted by this migration.
 
 Vinext and Nitro versions are prerelease and pinned. Validate releases in a separate preview environment before upgrading. See [Vinext's deployment documentation](https://github.com/cloudflare/vinext#other-platforms-via-nitro).
@@ -18,15 +22,16 @@ Use the Vercel account with access to `mccias-projects/car-booking-records`. Kee
 
 1. Confirm the company's Vercel plan, region, spending limits and Turso account. No paid plan or storage service has been activated by this change.
 2. Create/select a Turso database. Store `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` as server environment variables. Vercel rejects local file databases in the application adapter.
-3. Create a **private** Blob store and attach its `BLOB_READ_WRITE_TOKEN` to this project. Public stores are inappropriate for registers. The current direct-upload implementation uses the token-based SDK; setting only `BLOB_STORE_ID` is insufficient for its upload authorization route.
+3. Create a **private** Blob store and attach its `BLOB_READ_WRITE_TOKEN` to this project. Keep the store private even for the public dashboard: the application controls which saved originals are served, and staging/extraction objects stay inaccessible. The current direct-upload implementation uses the token-based SDK; setting only `BLOB_STORE_ID` is insufficient for its upload authorization route.
 4. Configure the following server-only variables. Never prefix secrets with `VITE_` or `NEXT_PUBLIC_`, paste them into a ticket, or add them to Git.
 
 | Variable | Purpose |
 | --- | --- |
-| `BETTER_AUTH_URL` | Exact HTTPS application origin, initially `https://car-booking-records.vercel.app` |
-| `BETTER_AUTH_SECRET` | Independently generated random secret, at least 32 characters |
-| `FLEET_ADMIN_EMAIL` | Verified initial administrator email |
-| `FLEET_BOOTSTRAP_TOKEN` | Independent random one-use activation code, at least 32 characters |
+| `FLEET_ACCESS_MODE` | `public` (default without sign-in) or `private` (staff accounts required) |
+| `BETTER_AUTH_URL` | Private mode only: exact HTTPS origin of the operator deployment |
+| `BETTER_AUTH_SECRET` | Private mode only: independently generated random secret, at least 32 characters |
+| `FLEET_ADMIN_EMAIL` | Private mode only: verified initial administrator email |
+| `FLEET_BOOTSTRAP_TOKEN` | Private mode initial setup only: independent random one-use activation code, at least 32 characters |
 | `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN` | Database endpoint and private service credential |
 | `BLOB_READ_WRITE_TOKEN` | Private store server credential |
 | `CRON_SECRET` | Independent random scheduler secret; required before enabling cron |
@@ -53,7 +58,7 @@ Apply `npm run db:migrate` against the intended database **before** directing us
 
 Deploy from Git on Vercel so native packages are built for Linux. A locally generated Windows function is for verification, not for `vercel deploy --prebuilt`.
 
-Once deployed, use `/login` → **I have an invitation** with the initial administrator email and bootstrap code, and enter your own password. Then remove `FLEET_BOOTSTRAP_TOKEN` from hosting secrets and redeploy. The database also prevents bootstrap reuse. In Settings → Staff access, save a role, create an invitation and share the displayed code privately. Codes expire after 24 hours; generating another invalidates older unused codes. No email is sent automatically. A failed registration can consume its code; issue another after correcting the failure. Account recovery currently requires an authorized database operator; self-service reset email is not configured.
+For an optional private operator deployment (`FLEET_ACCESS_MODE=private`), use `/login` → **I have an invitation** with the initial administrator email and bootstrap code, and enter your own password. Then remove `FLEET_BOOTSTRAP_TOKEN` from hosting secrets and redeploy. The database also prevents bootstrap reuse. In Settings → Staff access, save a role, create an invitation and share the displayed code privately. Codes expire after 24 hours; generating another invalidates older unused codes. No email is sent automatically. A failed registration can consume its code; issue another after correcting the failure. Account recovery currently requires an authorized database operator; self-service reset email is not configured.
 
 The configured application origin is intentionally strict. Preview deployments need their own correct `BETTER_AUTH_URL` and isolated services. Do not broaden trusted origins to every Vercel domain.
 
@@ -65,10 +70,10 @@ This checkout does **not** contain a verified production D1/R2 export. A build o
 2. Retain all application IDs, foreign keys, original/corrected JSON, review history, sync generations and object keys. Do not import old login sessions or OAuth authorization states as valid new sessions.
 3. Restore the two existing business-schema migrations and data to the new database, then apply the additive auth/platform migration. If restoring an already-created schema, reconcile the migration ledger against verified schema/checksums; do not blindly replay `CREATE TABLE` or mark unknown migrations applied.
 4. Copy objects into private Blob storage under their recorded keys, verify original SHA-256 values and counts against `documents`, and check extraction objects against `extractionKey`. Never store register files under `public/`.
-5. Compare table counts, stable IDs, latest sync generation, confirmed-trip/fuel totals, excluded records and several sampled source links. Obtain fresh invitations for staff. Test inactive and Viewer accounts against records, images and exports.
+5. Compare table counts, stable IDs, latest sync generation, confirmed-trip/fuel totals, excluded records and several sampled source links. Verify anonymous access to records, images and exports on the public deployment. On a private operator deployment, obtain fresh invitations and test inactive and Viewer accounts.
 6. Switch traffic only after these comparisons pass. Retain the source backup and old host for rollback; database changes are not undone by rolling back application code.
 
-The historical supplied-file preview stays authenticated and separate from operational totals. It is not a replacement for a production data migration.
+The historical supplied-file preview follows the selected access mode and stays separate from operational totals. It is not a replacement for a production data migration.
 
 ## Automatic sync and cleanup
 
@@ -78,6 +83,6 @@ No cron schedule is enabled in `vercel.json` yet: the account plan and Zoho allo
 
 ## Local work
 
-Use an ignored `.env.local` with a dedicated `file:./work/local.db`, localhost auth origin, test-only random auth/bootstrap secrets and a local owner email. Run `npm run db:migrate`, then `npm run dev`. No automatic development sign-in or production fixture bypass exists. Private upload integration still needs a separate test Blob store; UI and manual register workflows must not claim uploads/extraction work without it.
+Use an ignored `.env.local` with a dedicated `file:./work/local.db`. Public viewing is the default and needs no auth setup. To test staff operations, set `FLEET_ACCESS_MODE=private`, a localhost auth origin, test-only random auth/bootstrap secrets and a local owner email. Run `npm run db:migrate`, then `npm run dev`. No automatic development sign-in or production fixture bypass exists. Private upload integration still needs a separate test Blob store; UI and manual register workflows must not claim uploads/extraction work without it.
 
 The old Wrangler fixture scripts are retained for historical reference and are not the Vercel preview workflow. Browser verification of the new branding and deployed storage/auth must still be completed when Chrome access is restored.
