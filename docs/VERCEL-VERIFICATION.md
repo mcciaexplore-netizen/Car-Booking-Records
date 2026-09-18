@@ -1,11 +1,14 @@
 # Car Booking Details — migration verification
 
-18 September 2026. Local verification only; **not a successful production deployment**.
+18 September 2026. The public Vercel deployment and connected Turso database are now verified. No Zoho import, document extraction or file-storage connection is claimed.
 
 | Check | Result |
 | --- | --- |
 | Acceptance suite, staged uploads and public-access cases | 42 passed |
 | Auth/database/platform, migration runner and production build initialization checks | 16 passed |
+| Live production deployment | Ready: `8b06c10`; `https://car-booking-records.vercel.app/` |
+| Live database read without cookies | HTTP 200; Viewer access, fixture mode false, zero stored operational records |
+| Live public dashboard | Loads without sign-in or database errors; correctly shows No records imported and Zoho setup incomplete |
 | TypeScript | Passed |
 | Vercel production build | Passed; Build Output API v3 with Node 24 server route |
 | Generated server `/` | 200; public dashboard with no sign-in/out links |
@@ -25,12 +28,12 @@ An 8 MB synthetic PDF passes the staged-upload/finalization path, retains one do
 
 ## Outstanding checks and release gates
 
-- Chrome access is restored. The MCCIA Vercel project and public deployment were inspected. A `car-booking-details` Turso Starter database is now connected and its two required server environment variable names were verified without revealing values. Initialization and deployed database reads are being verified in the new production release; private Blob remains unconfigured.
-- The new production-build checks stop releases with missing database credentials or failed migrations, and do not migrate during preview builds. Private Blob and production anonymous reads still need verification. Administrator activation and role checks apply only to an optional private operator deployment. Public mode requires no account setup.
+- Chrome access is restored. The MCCIA Vercel project and public deployment were inspected. A `car-booking-details` Turso Starter database is now connected and its two required server environment variable names were verified without revealing values. The production release completed its versioned migrations and an independent HTTP request without cookies returned a valid database snapshot. The refreshed public page displayed No records imported, with no database error. Private Blob remains unconfigured.
+- The new production-build checks stop releases with missing database credentials or failed migrations, and do not migrate during preview builds. Production anonymous reads passed. Private Blob still needs configuration and end-to-end verification. Administrator activation and role checks apply only to an optional private operator deployment. Public mode requires no account setup.
 - Read-only checks of the original Sites database found `source_records`, `actual_trips`, `documents`, `fuel_purchases` and `sync_runs` empty. No operational records were transferred or synthesized. Historical supplied-file preview records remain separate from operational totals.
 - Zoho credentials, actual report mappings, selected history, API allowance and unattended cron remain unconnected/unverified. Azure extraction remains disabled/unverified; notification delivery remains disabled.
 - Strict lint remains an existing release gate, documented separately in LINT-STATUS.md. Passing build/type checks do not imply lint passes.
 - Dependency audit after removing obsolete Cloudflare hosting packages reports **4 moderate** findings in the Drizzle Kit / esbuild-kit / older nested esbuild chain, including with `--omit=dev`. No force downgrade was applied. Review/update the schema tooling before a production release; do not expose its development server. No high or critical findings were reported in that final audit.
-- The build emits framework warnings about dynamic imports, duplicate identical CSS emission and optional packages that its tracer cannot find. The generated-server smoke checks pass; Vercel/Linux deployment and authenticated browser checks remain required. Vinext/Nitro prerelease versions are pinned.
+- The build emits framework warnings about dynamic imports, duplicate identical CSS emission and optional packages that its tracer cannot find. The generated-server smoke checks and Vercel/Linux deployment passed. Private operator sign-in and file-storage browser checks remain outstanding. Vinext/Nitro prerelease versions are pinned.
 
 Use [VERCEL-DEPLOYMENT.md](VERCEL-DEPLOYMENT.md) for setup and cutover and [VERCEL-COSTS.md](VERCEL-COSTS.md) for account-dependent cost checks. The previous Sites-specific verification remains historical evidence, not verification of this deployment.

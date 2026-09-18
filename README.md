@@ -1,6 +1,6 @@
 # Car Booking Details
 
-External company vehicle dashboard upgraded from the existing Fleet Desk prototype. Preserves its visual system, navigation, vehicle panels and register workflows. The current Vercel migration uses Turso/libSQL and private Blob storage; provisioning and production data transfer remain unverified.
+External company vehicle dashboard upgraded from the existing Fleet Desk prototype. Preserves its visual system, navigation, vehicle panels and register workflows. The public Vercel deployment is connected to Turso/libSQL and its database read was verified on 18 September 2026. Private Blob storage remains unconfigured. No operational records have been imported; historical preview records stay separate.
 
 Public viewing without sign-in is the owner-selected default: records, original images and exports are accessible to everyone with the URL. Edits, uploads, approval decisions and administration are disabled in public mode. Set `FLEET_ACCESS_MODE=private` on a protected operator deployment to restore accounts and staff actions. See [Vercel access and deployment setup](docs/VERCEL-DEPLOYMENT.md).
 

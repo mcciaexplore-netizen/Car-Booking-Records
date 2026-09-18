@@ -2,6 +2,10 @@
 
 Updated 18 September 2026. This replaces the Sites deployment procedure for the current checkout. The existing Sites deployment and its records have not been changed. The requested application name is **Car Booking Details**; internal `fleet` API paths and stable record IDs remain compatible. The supplied MCCIA screenshot is displayed with a CSS frame; the original logo file is unmodified.
 
+## Current connection
+
+On 18 September 2026, the `car-booking-details` Turso Starter database was observed connected to this Vercel project, with `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` stored as server secrets. The production deployment initialized the schema, and a cookie-free request to `/api/fleet/snapshot` returned HTTP 200 with zero operational records and fixture mode false. The original Sites database had no synchronized records, actual trips, uploaded documents, fuel purchases or sync runs to transfer. Zoho, private Blob and optional extraction remain unconfigured; historical preview rows stay separate.
+
 ## Architecture
 
 The owner selected **public viewing without sign-in**. This is the default when `FLEET_ACCESS_MODE` is unset or `public`. Anyone with the URL can read company records, employee/driver details, original register images, review evidence and CSV exports, including the historical preview. `/login` and `/logout` redirect to `/`; account endpoints are disabled. Public access never creates an administrator or permits edits, uploads, review decisions or integration/staff settings. Previously signed-in administrators also receive read-only access in this mode. Scheduled synchronization still requires its server secret.
@@ -85,4 +89,4 @@ No cron schedule is enabled in `vercel.json` yet: the account plan and Zoho allo
 
 Use an ignored `.env.local` with a dedicated `file:./work/local.db`. Public viewing is the default and needs no auth setup. To test staff operations, set `FLEET_ACCESS_MODE=private`, a localhost auth origin, test-only random auth/bootstrap secrets and a local owner email. Run `npm run db:migrate`, then `npm run dev`. No automatic development sign-in or production fixture bypass exists. Private upload integration still needs a separate test Blob store; UI and manual register workflows must not claim uploads/extraction work without it.
 
-The old Wrangler fixture scripts are retained for historical reference and are not the Vercel preview workflow. Browser verification of the new branding and deployed storage/auth must still be completed when Chrome access is restored.
+The old Wrangler fixture scripts are retained for historical reference and are not the Vercel preview workflow. Chrome access is restored and the public production dashboard was verified. Private file storage and optional private-mode authentication still require end-to-end checks.
