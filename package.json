@@ -17,7 +17,7 @@
     "db:generate": "drizzle-kit generate",
     "build:vercel": "node scripts/build-vercel.mjs",
     "db:migrate": "node --env-file-if-exists=.env.local scripts/migrate-vercel.mjs",
-    "test:platform": "node scripts/build-platform-tests.mjs && node --test tests/platform.test.mjs tests/migrations.test.mjs",
+    "test:platform": "node scripts/build-platform-tests.mjs && node --test tests/platform.test.mjs tests/migrations.test.mjs tests/build-vercel.test.mjs",
     "check:vercel": "node scripts/check-vercel-build.mjs"
   },
   "dependencies": {

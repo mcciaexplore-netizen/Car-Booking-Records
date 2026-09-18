@@ -5,7 +5,7 @@
 | Check | Result |
 | --- | --- |
 | Acceptance suite, staged uploads and public-access cases | 42 passed |
-| Auth/database/platform suite and migration-runner test | 11 passed |
+| Auth/database/platform, migration runner and production build initialization checks | 16 passed |
 | TypeScript | Passed |
 | Vercel production build | Passed; Build Output API v3 with Node 24 server route |
 | Generated server `/` | 200; public dashboard with no sign-in/out links |
@@ -25,9 +25,9 @@ An 8 MB synthetic PDF passes the staged-upload/finalization path, retains one do
 
 ## Outstanding checks and release gates
 
-- Browser automation could not connect to Chrome. The Vercel team/project, production settings and final mobile/desktop appearance have not been inspected through that session. The earlier in-app Vercel account lacked project access. No Vercel settings, subscription, audience or deployment were changed.
-- Turso and private Blob resources/secrets and production anonymous reads still need provisioning/verification. Administrator activation and role checks apply only to an optional private operator deployment. Public mode requires no account setup.
-- Existing production D1/R2 records and files have not been exported, migrated or reconciled. Preserve the old host and verify counts, IDs, checksums and links before cutover.
+- Chrome access is restored. The MCCIA Vercel project and public deployment were inspected. A `car-booking-details` Turso Starter database is now connected and its two required server environment variable names were verified without revealing values. Initialization and deployed database reads are being verified in the new production release; private Blob remains unconfigured.
+- The new production-build checks stop releases with missing database credentials or failed migrations, and do not migrate during preview builds. Private Blob and production anonymous reads still need verification. Administrator activation and role checks apply only to an optional private operator deployment. Public mode requires no account setup.
+- Read-only checks of the original Sites database found `source_records`, `actual_trips`, `documents`, `fuel_purchases` and `sync_runs` empty. No operational records were transferred or synthesized. Historical supplied-file preview records remain separate from operational totals.
 - Zoho credentials, actual report mappings, selected history, API allowance and unattended cron remain unconnected/unverified. Azure extraction remains disabled/unverified; notification delivery remains disabled.
 - Strict lint remains an existing release gate, documented separately in LINT-STATUS.md. Passing build/type checks do not imply lint passes.
 - Dependency audit after removing obsolete Cloudflare hosting packages reports **4 moderate** findings in the Drizzle Kit / esbuild-kit / older nested esbuild chain, including with `--omit=dev`. No force downgrade was applied. Review/update the schema tooling before a production release; do not expose its development server. No high or critical findings were reported in that final audit.

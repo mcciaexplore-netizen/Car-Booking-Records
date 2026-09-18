@@ -54,7 +54,7 @@ npm.cmd run build:vercel
 node scripts/check-vercel-build.mjs
 ```
 
-Apply `npm run db:migrate` against the intended database **before** directing users to the release. The runner applies each SQL migration transactionally and records a normalized checksum. Re-running does not duplicate schema; changed applied migrations fail. It never seeds company or sample data. The Drizzle schema, journal and snapshot include the new auth and upload-intent tables. Generate future additive changes with `npm run db:generate`; never rewrite an applied migration.
+For Vercel production builds (`VERCEL_ENV=production`), `npm run build:vercel` now requires the remote Turso URL and token, builds the application, then automatically runs the database migrations before Vercel publishes the release. A build or migration failure stops deployment. Preview and local builds never run migrations automatically; use `npm run db:migrate` explicitly against their intended isolated database. The runner applies each SQL migration transactionally and records a normalized checksum. Re-running does not duplicate schema; changed applied migrations fail. It never seeds company or sample data. The Drizzle schema, journal and snapshot include the new auth and upload-intent tables. Generate future additive changes with `npm run db:generate`; never rewrite an applied migration.
 
 Deploy from Git on Vercel so native packages are built for Linux. A locally generated Windows function is for verification, not for `vercel deploy --prebuilt`.
 
