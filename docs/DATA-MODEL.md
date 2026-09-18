@@ -86,3 +86,13 @@ Global filters are applied on the server using the same function as CSV exports.
 | Pending image reviews | Count of nondeleted documents with no rows or at least one unconfirmed row, across the whole workspace. |
 
 Vehicle panels show the most recent recorded evidence across dates, separately from report filters. An old returned trip is labelled recorded returned, not live available. Unknown names, fuel levels and odometers stay unknown. Fuel purchased is not fuel consumed. Km/l stays **Insufficient data** until a full-tank or fuel-balance methodology and source evidence exist. Utilization is omitted until the available-hours schedule and maintenance treatment are agreed. Odometer differences and fuel-price variation are investigation prompts only.
+
+## Frontend contract additions — 18 September 2026
+
+No new table or migration is required. The existing settings store now also holds non-secret `zohoApplication` (saved owner/app link names), `oauthVerifiedAt`, `schedulerLastSeen` and `schedulerLastCompleted`. Tokens remain in server secrets. Observed scheduler timestamps describe authenticated calls/completed checks, not verified recurrence.
+
+Extracted-row `original` JSON may additionally contain original normalized values, source cells/column mappings and page geometry. Original raw cell text is retained separately from corrections. A highlight requires valid page-specific geometry; absence of coordinates is not repaired by guessing. Correction flags remain until explicit confirmation. Old original payloads without these optional fields continue to display textual references.
+
+The snapshot accepts stable person IDs, pagination/sort/layout context and a separate `outcome` drill-down constraint. `outcome` intersects the global permission filter instead of replacing it. Server filtering and metrics precede page slicing; clients receive bounded lists and row references, with original/corrected evidence available only through authorized detail routes. Exports remove pagination and use the same filters and ordering. Fuel date filtering, grouping and ordering prefer purchase/register date over journey departure; fuel ignores trip-only permission/outcome/issue metrics. Booking lists likewise do not interpret trip permission status as booking approval.
+
+All API attachments, detail views and exports still require active server-side membership. Date-only values retain their precision. Default sort puts known dates newest first with stable ID tie breaking; undated records sort last. Pending documents are selected before pagination and the pending KPI counts whole-workspace documents. Full-history server reconciliation remains a performance consideration documented in the implementation report.

@@ -34,7 +34,8 @@ const localBindingConfig = {
     : [],
 };
 
-export default defineConfig(async () => {
+export default defineConfig(async ({ command }) => {
+  const fixtures = command === 'serve' && process.env.FLEET_UX_FIXTURES === '1';
   // Keep Wrangler and Miniflare state project-local. These are non-secret tool
   // settings; application environment belongs in ignored `.env*` files.
   process.env.WRANGLER_WRITE_LOGS ??= 'false';
@@ -43,6 +44,22 @@ export default defineConfig(async () => {
 
   // Wrangler snapshots its log path while the Cloudflare plugin is imported.
   const { cloudflare } = await import('@cloudflare/vite-plugin');
+
+  // The Python launcher decrypts only into its child environment. These bindings
+  // exist only in local development and must never enter the production build.
+  const localZohoVars: Record<string, string> = {};
+  if (command === 'serve' && process.env.FLEET_LOCAL_ZOHO === '1') {
+    for (const name of [
+      'ZOHO_CLIENT_ID',
+      'ZOHO_CLIENT_SECRET',
+      'ZOHO_REFRESH_TOKEN',
+      'ZOHO_DC',
+      'ZOHO_OWNER',
+      'ZOHO_APP',
+    ]) {
+      if (process.env[name]) localZohoVars[name] = process.env[name]!;
+    }
+  }
 
   return {
     css: { postcss: { plugins: [tailwindcss()] } },
@@ -53,8 +70,14 @@ export default defineConfig(async () => {
       vinext(),
       sites(),
       cloudflare({
+        ...(fixtures
+          ? { persistState: { path: '.wrangler/ux-fixtures' } }
+          : {}),
         viteEnvironment: { name: 'rsc', childEnvironments: ['ssr'] },
-        config: localBindingConfig,
+        config: {
+          ...localBindingConfig,
+          vars: fixtures ? { FLEET_UX_FIXTURES: '1' } : localZohoVars,
+        },
       }),
     ],
   };

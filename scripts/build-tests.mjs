@@ -7,6 +7,7 @@ await build({
   platform: 'node',
   format: 'esm',
   outfile: 'work/fleet-tests.mjs',
+  define: { 'import.meta.env.DEV': 'false' },
   plugins: [
     {
       name: 'test-only-platform-adapters',

@@ -15,8 +15,25 @@ export type Runtime = {
   EXTRACTION_ENABLED?: string;
   SCHEDULER_SECRET?: string;
   FLEET_ADMIN_EMAIL?: string;
+  FLEET_UX_FIXTURES?: string;
 };
-export const runtime = () => env as unknown as Runtime;
+export const runtime = () => {
+  const bindings = env as unknown as Runtime;
+  // Fixture mode exists only in the development Vite configuration. Strip all
+  // integration secrets even if the developer has a real local connection.
+  if (
+    (import.meta as ImportMeta & { env: { DEV: boolean } }).env.DEV &&
+    bindings.FLEET_UX_FIXTURES === '1'
+  ) {
+    return {
+      DB: bindings.DB,
+      DOCUMENTS: bindings.DOCUMENTS,
+      FLEET_UX_FIXTURES: '1',
+      FLEET_ADMIN_EMAIL: 'seedy@sites.test',
+    } as Runtime;
+  }
+  return bindings;
+};
 export function db() {
   const d = runtime().DB;
   if (!d) throw new HttpError(503, 'Database is not provisioned.');

@@ -1,5 +1,4 @@
 import {
-  all,
   first,
   db,
   setting,
@@ -12,6 +11,14 @@ import {
   audit,
 } from './server';
 import { blank, validateValues, timestamp, type Kind } from './domain';
+import { createTokenManager, oauthConfigured } from './zoho-oauth';
+const tokenManager = createTokenManager();
+export const oauthStatus = () => tokenManager.status(runtime());
+export async function checkConnection() {
+  await tokenManager.get(runtime());
+  await setSetting('oauthVerifiedAt', now());
+  return { ...oauthStatus(), applicationConfigured: await configured() };
+}
 export type Mapping = {
   kind: Kind;
   report: string;
@@ -36,59 +43,25 @@ export const SYNC_DEFAULT: SyncConfig = {
   allowanceVerified: false,
   incremental: false,
 };
-const DC: Record<string, string> = {
-  US: 'com',
-  IN: 'in',
-  EU: 'eu',
-  AU: 'com.au',
-  JP: 'jp',
-  CA: 'ca',
-  SA: 'sa',
-  CN: 'com.cn',
-  UAE: 'ae',
-};
-export function configured() {
+export async function application() {
   const e = runtime();
-  return !!(
-    e.ZOHO_CLIENT_ID &&
-    e.ZOHO_CLIENT_SECRET &&
-    e.ZOHO_REFRESH_TOKEN &&
-    DC[e.ZOHO_DC ?? ''] &&
-    e.ZOHO_OWNER &&
-    e.ZOHO_APP
-  );
+  return setting('zohoApplication', {
+    owner: e.ZOHO_OWNER ?? '',
+    app: e.ZOHO_APP ?? '',
+  });
+}
+export async function configured() {
+  const e = runtime();
+  const a = await application();
+  return !!(oauthConfigured(e) && a.owner && a.app);
 }
 export async function token() {
-  if (!configured())
+  if (!(await configured()))
     throw new HttpError(
       503,
       'Zoho is not connected. Configure the server secrets, account data centre, owner and app first.',
     );
-  const e = runtime(),
-    suffix = DC[e.ZOHO_DC!];
-  const r = await fetch(`https://accounts.zoho.${suffix}/oauth/v2/token`, {
-    method: 'POST',
-    body: new URLSearchParams({
-      grant_type: 'refresh_token',
-      client_id: e.ZOHO_CLIENT_ID!,
-      client_secret: e.ZOHO_CLIENT_SECRET!,
-      refresh_token: e.ZOHO_REFRESH_TOKEN!,
-    }),
-    signal: AbortSignal.timeout(20000),
-  });
-  const data = (await r.json()) as any;
-  if (!r.ok || !data.access_token)
-    throw new HttpError(
-      502,
-      'Zoho OAuth refresh failed. Check the server connection.',
-    );
-  const domain = data.api_domain ?? `https://www.zohoapis.${suffix}`;
-  if (domain !== `https://www.zohoapis.${suffix}`)
-    throw new HttpError(
-      502,
-      'Zoho returned a different data centre. Check the configured region.',
-    );
-  return { access: data.access_token as string, domain };
+  return tokenManager.get(runtime());
 }
 export async function reserveCall() {
   const c = await setting('syncConfig', SYNC_DEFAULT);
@@ -119,17 +92,28 @@ export async function zohoGet(
   auth?: Awaited<ReturnType<typeof token>>,
 ) {
   await reserveCall();
-  const t = auth ?? (await token());
+  let t = auth ?? (await token());
   const url = new URL(t.domain + path);
   for (const [k, v] of Object.entries(query)) url.searchParams.set(k, v);
-  const response = await fetch(url, {
-    headers: {
-      Authorization: `Zoho-oauthtoken ${t.access}`,
-      accept: 'application/json',
-      ...(cursor ? { record_cursor: cursor } : {}),
-    },
-    signal: AbortSignal.timeout(25000),
-  });
+  const send = () =>
+    fetch(url, {
+      headers: {
+        Authorization: `Zoho-oauthtoken ${t.access}`,
+        accept: 'application/json',
+        ...(cursor ? { record_cursor: cursor } : {}),
+      },
+      signal: AbortSignal.timeout(25000),
+      redirect: 'manual',
+      cache: 'no-store',
+    });
+  let response = await send();
+  if (response.status === 401) {
+    await response.body?.cancel();
+    tokenManager.invalidate(t.access);
+    await reserveCall();
+    t = await token();
+    response = await send();
+  }
   if (response.status === 429 || response.status >= 500) {
     const seconds = Math.min(
       3600,
@@ -162,12 +146,24 @@ class RetryError extends Error {
     super(message);
   }
 }
-const base = (type: 'meta' | 'data') =>
-  `/creator/v2.1/${type}/${encodeURIComponent(runtime().ZOHO_OWNER!)}/${encodeURIComponent(runtime().ZOHO_APP!)}`;
+const base = async (type: 'meta' | 'data') => {
+  const a = await application();
+  return `/creator/v2.1/${type}/${encodeURIComponent(a.owner)}/${encodeURIComponent(a.app)}`;
+};
 export async function discover() {
   const t = await token();
-  const reports = await zohoGet(base('meta') + '/reports', {}, undefined, t);
-  const forms = await zohoGet(base('meta') + '/forms', {}, undefined, t);
+  const reports = await zohoGet(
+    (await base('meta')) + '/reports',
+    {},
+    undefined,
+    t,
+  );
+  const forms = await zohoGet(
+    (await base('meta')) + '/forms',
+    {},
+    undefined,
+    t,
+  );
   const meta = {
     reports: reports.data,
     forms: forms.data,
@@ -185,7 +181,7 @@ export async function discoverFields(form: string) {
   const forms = meta.forms.forms ?? meta.forms;
   if (!Array.isArray(forms) || !forms.some((f: any) => f.link_name === form))
     throw new HttpError(400, 'Select a form returned by metadata discovery.');
-  const fields = await zohoGet(base('meta') + `/form/${form}/fields`);
+  const fields = await zohoGet((await base('meta')) + `/form/${form}/fields`);
   meta.fields[form] = fields.data;
   await setSetting('zohoMetadata', meta);
   return meta;
@@ -332,7 +328,7 @@ export function mapRecord(raw: any, m: Mapping) {
   };
 }
 export async function startSync(mode: 'full' | 'incremental' = 'full') {
-  if (!configured()) throw new HttpError(503, 'Zoho is not connected.');
+  if (!(await configured())) throw new HttpError(503, 'Zoho is not connected.');
   const config = await setting('syncConfig', SYNC_DEFAULT);
   if (!config.mappings.length || !config.allowanceVerified)
     throw new HttpError(
@@ -446,7 +442,7 @@ export async function syncStep() {
         .join(' && ');
     }
     const result = await zohoGet(
-      base('data') + `/report/${encodeURIComponent(m.report)}`,
+      (await base('data')) + `/report/${encodeURIComponent(m.report)}`,
       query,
       run.cursor ?? undefined,
     );

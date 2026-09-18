@@ -1,5 +1,5 @@
 'use client';
-import { useState, useMemo, useEffect, useRef, type ReactNode } from 'react';
+import { useMemo, useEffect, useRef, type ReactNode } from 'react';
 import {
   CarFront,
   LayoutDashboard,
@@ -58,7 +58,7 @@ import {
   type BookingReview,
   type SourceRow,
 } from '@/lib/reconcile';
-import { csv } from '@/lib/fleet';
+import { useFleetNavigation } from './fleet-navigation';
 
 const nav = [
   ['Overview', LayoutDashboard],
@@ -82,7 +82,7 @@ const shortDate = (v: unknown) =>
       })
     : text(v);
 const tones: Record<string, string> = {
-  'Exact candidate': 'green',
+  'Exact candidate': 'blue',
   'Similar-name candidate': 'blue',
   'Date / vehicle candidate': 'neutral',
   'Multiple candidates': 'amber',
@@ -113,7 +113,9 @@ function Picker({
       <SelectContent>
         {options.map((v) => (
           <SelectItem key={v} value={v}>
-            {v}
+            {v === 'All'
+              ? `All ${label === 'Vehicle' ? 'vehicles' : 'candidate outcomes'}`
+              : v}
           </SelectItem>
         ))}
       </SelectContent>
@@ -154,14 +156,32 @@ function Grid({
 }
 export default function SampleDashboard({ input }: { input: SampleInput }) {
   const records = reconcile(input);
-  const [view, setView] = useState<View>('Overview'),
-    [query, setQuery] = useState(''),
-    [vehicle, setVehicle] = useState('All'),
-    [outcome, setOutcome] = useState('All'),
-    [from, setFrom] = useState(''),
-    [to, setTo] = useState(''),
-    [page, setPage] = useState(1),
-    [selected, setSelected] = useState<SourceRow | null>(null);
+  const url = useFleetNavigation(nav.map(([v]) => v));
+  const view = url.view as View,
+    query = url.params.get('query') ?? '',
+    vehicle = url.params.get('vehicle') ?? 'All',
+    outcome = url.params.get('outcome') ?? 'All',
+    from = url.params.get('from') ?? '',
+    to = url.params.get('to') ?? '',
+    page = url.page;
+  const setView = (v: View) => url.setView(v);
+  const setQuery = (v: string) =>
+    url.write({ query: v || null, page: null }, true);
+  const setVehicle = (v: string) =>
+    url.write({ vehicle: v === 'All' ? null : v, page: null }, true);
+  const setOutcome = (v: string) =>
+    url.write({ outcome: v === 'All' ? null : v, page: null }, true);
+  const setFrom = (v: string) =>
+    url.write({ from: v || null, page: null }, true);
+  const setTo = (v: string) => url.write({ to: v || null, page: null }, true);
+  const setPage = (v: number) =>
+    url.write({ page: v === 1 ? null : String(v) });
+  const selected =
+    [...records.actual, ...records.zoho, ...records.imageBookings].find(
+      (r) => r.id === url.id,
+    ) ?? null;
+  const setSelected = (r: SourceRow | null) =>
+    r ? url.open('historical', r.id) : url.close();
   const invalidRange = !!(from && to && from > to);
   const matches = (r: SourceRow) =>
     !invalidRange &&
@@ -188,7 +208,9 @@ export default function SampleDashboard({ input }: { input: SampleInput }) {
     currentPage = Math.min(page, maxPage),
     pageRows = shown.slice((currentPage - 1) * 20, currentPage * 20);
   const current = useRef({ view, actual, zoho, image });
-  current.current = { view, actual, zoho, image };
+  useEffect(() => {
+    current.current = { view, actual, zoho, image };
+  }, [view, actual, zoho, image]);
   function navigate(v: View) {
     setView(v);
     setPage(1);
@@ -297,7 +319,7 @@ export default function SampleDashboard({ input }: { input: SampleInput }) {
           </a>
         </SidebarFooter>
       </Sidebar>
-      <main className="workspace">
+      <main id="fleet-main" tabIndex={-1} className="workspace">
         <header className="topbar">
           <div className="flex items-center gap-3">
             <SidebarTrigger />
@@ -328,16 +350,17 @@ export default function SampleDashboard({ input }: { input: SampleInput }) {
               </Button>
             )}
           </div>
-          <div className="sample-evidence">
-            <ShieldCheck size={20} />
-            <div>
-              <b>Booking candidates are not approval confirmation.</b>
-              <p>
-                Zoho provides “Assigned” status, but no approval timestamp. The
-                register has no actual departure times or shared booking IDs.
-              </p>
-            </div>
-          </div>
+          <details className="sample-evidence evidence-summary">
+            <summary>
+              <ShieldCheck size={18} />
+              Booking candidates are not approval confirmation.
+            </summary>
+            <p>
+              Zoho supplies Assigned status without an approval timestamp. These
+              historical register records lack actual departure times and shared
+              booking IDs. Original images were not supplied.
+            </p>
+          </details>
           {view !== 'Sources' && (
             <>
               <div className="sample-filters">
@@ -350,12 +373,15 @@ export default function SampleDashboard({ input }: { input: SampleInput }) {
                     onChange={(e) => change(() => setQuery(e.target.value))}
                   />
                 </div>
-                <Picker
-                  label="Vehicle"
-                  value={vehicle}
-                  onChange={(v) => change(() => setVehicle(v))}
-                  options={['All', 'Innova', 'Ertiga', 'TUV']}
-                />
+                <label>
+                  Vehicle
+                  <Picker
+                    label="Vehicle"
+                    value={vehicle}
+                    onChange={(v) => change(() => setVehicle(v))}
+                    options={['All', 'Innova', 'Ertiga', 'TUV']}
+                  />
+                </label>
                 <label>
                   From
                   <Input
@@ -375,12 +401,15 @@ export default function SampleDashboard({ input }: { input: SampleInput }) {
                   />
                 </label>
                 {['Actual trips', 'Data quality'].includes(view) && (
-                  <Picker
-                    label="Candidate result"
-                    value={outcome}
-                    onChange={(v) => change(() => setOutcome(v))}
-                    options={['All', ...outcomes]}
-                  />
+                  <label>
+                    Candidate result
+                    <Picker
+                      label="Candidate result"
+                      value={outcome}
+                      onChange={(v) => change(() => setOutcome(v))}
+                      options={['All', ...outcomes]}
+                    />
+                  </label>
                 )}
                 <Button
                   variant="ghost"
@@ -625,141 +654,181 @@ export default function SampleDashboard({ input }: { input: SampleInput }) {
                   </p>
                 </div>
               </div>
-              {['Actual trips', 'Data quality'].includes(view) ? (
-                <Grid
-                  headers={[
-                    'Employee / source',
-                    'Vehicle / driver',
-                    'Recorded dates',
-                    'Distance',
-                    'Candidate result',
-                    'Details',
-                  ]}
-                  empty={!pageRows.length}
-                >
-                  {(pageRows as TripReview[]).map((t) => (
-                    <TableRow key={t.id}>
-                      <TableCell>
-                        <b>{text(t.employee)}</b>
-                        <small>
-                          {t.sheet} row {t.row}
-                        </small>
-                        <small>{text(t.destination)}</small>
-                      </TableCell>
-                      <TableCell>
-                        {text(t.vehicle)}
-                        <small>{text(t.driver)}</small>
-                      </TableCell>
-                      <TableCell>
-                        {shortDate(t.dateISO)}
-                        {t.dateUncertain && (
-                          <small className="form-error">
-                            Date needs review
+              <div className="historical-table">
+                {['Actual trips', 'Data quality'].includes(view) ? (
+                  <Grid
+                    headers={[
+                      'Employee / source',
+                      'Vehicle / driver',
+                      'Recorded dates',
+                      'Distance',
+                      'Candidate result',
+                      'Details',
+                    ]}
+                    empty={!pageRows.length}
+                  >
+                    {(pageRows as TripReview[]).map((t) => (
+                      <TableRow key={t.id}>
+                        <TableCell>
+                          <b>{text(t.employee)}</b>
+                          <small>
+                            {t.sheet} row {t.row}
                           </small>
-                        )}
-                        <small>
-                          {t.returnISO
-                            ? 'Return: ' + shortDate(t.returnISO)
-                            : 'Return date not supplied'}
-                        </small>
-                      </TableCell>
-                      <TableCell>
-                        {t.distance === null
-                          ? 'Not supplied'
-                          : count(t.distance) + ' km'}
-                        <small>Reported: {text(t.reportedKm)} km</small>
-                      </TableCell>
-                      <TableCell>
-                        <Badge value={t.outcome} />
-                        {view === 'Data quality' && (
-                          <small>{t.issues.join(' · ')}</small>
-                        )}
-                        {t.sharedCandidate && (
-                          <small>Candidate shared by multiple trip rows</small>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <Button
-                          variant="outline"
-                          onClick={() => setSelected(t)}
-                        >
-                          Review
-                          <ArrowUpRight />
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </Grid>
-              ) : (
-                <Grid
-                  headers={[
-                    'Employee / source',
-                    'Vehicle / driver',
-                    'Travel date',
-                    'Destination / purpose',
-                    'Source status',
-                    'Cross-reference',
-                    'Details',
-                  ]}
-                  empty={!pageRows.length}
-                >
-                  {pageRows.map((b) => (
-                    <TableRow key={b.id}>
-                      <TableCell>
-                        <b>{text(b.employee)}</b>
-                        <small>
-                          {b.sheet} row {b.row}
-                        </small>
-                      </TableCell>
-                      <TableCell>
-                        {text(b.vehicle)}
-                        <small>{text(b.driver)}</small>
-                      </TableCell>
-                      <TableCell>
-                        {shortDate(b.dateISO)}
-                        {view === 'Zoho bookings' && (
-                          <small>{text(b.startTime)}</small>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        {text(b.company)}
-                        <small>{text(b.destination)}</small>
-                      </TableCell>
-                      <TableCell>
-                        <Badge value={text(b.status)} />
-                        <small>Approval time not supplied</small>
-                      </TableCell>
-                      <TableCell>
-                        {view === 'Zoho bookings' ? (
-                          <>
-                            <span>
-                              {(b as BookingReview).tripRefs.length} name-based
-                              trip candidates
-                            </span>
-                            <small>
-                              {(b as BookingReview).imageRefs.length}{' '}
-                              image-booking counterparts
+                          <small>{text(t.destination)}</small>
+                        </TableCell>
+                        <TableCell>
+                          {text(t.vehicle)}
+                          <small>{text(t.driver)}</small>
+                        </TableCell>
+                        <TableCell>
+                          {shortDate(t.dateISO)}
+                          {t.dateUncertain && (
+                            <small className="form-error">
+                              Date needs review
                             </small>
-                          </>
-                        ) : (
-                          <span>
-                            {(b.zohoRefs as string[]).length} exact Zoho
-                            counterparts
-                          </span>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <Button
-                          variant="outline"
-                          onClick={() => setSelected(b)}
-                        >
-                          Details
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </Grid>
-              )}
+                          )}
+                          <small>
+                            {t.returnISO
+                              ? 'Return: ' + shortDate(t.returnISO)
+                              : 'Return date not supplied'}
+                          </small>
+                        </TableCell>
+                        <TableCell>
+                          {t.distance === null
+                            ? 'Not supplied'
+                            : count(t.distance) + ' km'}
+                          <small>Reported: {text(t.reportedKm)} km</small>
+                        </TableCell>
+                        <TableCell>
+                          <Badge value={t.outcome} />
+                          {view === 'Data quality' && (
+                            <small>{t.issues.join(' · ')}</small>
+                          )}
+                          {t.sharedCandidate && (
+                            <small>
+                              Candidate shared by multiple trip rows
+                            </small>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <Button
+                            variant="outline"
+                            onClick={() => setSelected(t)}
+                          >
+                            Review
+                            <ArrowUpRight />
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </Grid>
+                ) : (
+                  <Grid
+                    headers={[
+                      'Employee / source',
+                      'Vehicle / driver',
+                      'Travel date',
+                      'Destination / purpose',
+                      'Source status',
+                      'Cross-reference',
+                      'Details',
+                    ]}
+                    empty={!pageRows.length}
+                  >
+                    {pageRows.map((b) => (
+                      <TableRow key={b.id}>
+                        <TableCell>
+                          <b>{text(b.employee)}</b>
+                          <small>
+                            {b.sheet} row {b.row}
+                          </small>
+                        </TableCell>
+                        <TableCell>
+                          {text(b.vehicle)}
+                          <small>{text(b.driver)}</small>
+                        </TableCell>
+                        <TableCell>
+                          {shortDate(b.dateISO)}
+                          {view === 'Zoho bookings' && (
+                            <small>{text(b.startTime)}</small>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          {text(b.company)}
+                          <small>{text(b.destination)}</small>
+                        </TableCell>
+                        <TableCell>
+                          <Badge value={text(b.status)} />
+                          <small>Approval time not supplied</small>
+                        </TableCell>
+                        <TableCell>
+                          {view === 'Zoho bookings' ? (
+                            <>
+                              <span>
+                                {(b as BookingReview).tripRefs.length}{' '}
+                                name-based trip candidates
+                              </span>
+                              <small>
+                                {(b as BookingReview).imageRefs.length}{' '}
+                                image-booking counterparts
+                              </small>
+                            </>
+                          ) : (
+                            <span>
+                              {(b.zohoRefs as string[]).length} exact Zoho
+                              counterparts
+                            </span>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <Button
+                            variant="outline"
+                            onClick={() => setSelected(b)}
+                          >
+                            Details
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </Grid>
+                )}
+              </div>
+              <div className="historical-cards">
+                {!pageRows.length && <p>No matching historical records.</p>}
+                {pageRows.map((r) => (
+                  <article className="record-card" key={r.id}>
+                    <div className="section-heading">
+                      <strong>{text(r.vehicle)}</strong>
+                      <span>{shortDate(r.dateISO)}</span>
+                    </div>
+                    <h3>{text(r.employee)}</h3>
+                    <p>{text(r.destination)}</p>
+                    <Badge
+                      value={
+                        'outcome' in r ? String(r.outcome) : text(r.status)
+                      }
+                    />
+                    <Button variant="outline" onClick={() => setSelected(r)}>
+                      Review evidence <ArrowUpRight size={15} />
+                    </Button>
+                    <details>
+                      <summary>Source and recorded details</summary>
+                      <p>Driver: {text(r.driver)}</p>
+                      <p>
+                        {r.source} · {r.sheet} · row {r.row}
+                      </p>
+                      {'distance' in r && (
+                        <p>
+                          Distance:{' '}
+                          {r.distance == null
+                            ? 'Not recorded'
+                            : text(r.distance) + ' km'}
+                        </p>
+                      )}
+                    </details>
+                  </article>
+                ))}
+              </div>
               <div className="pager">
                 <span>
                   {shown.length
@@ -882,7 +951,10 @@ export default function SampleDashboard({ input }: { input: SampleInput }) {
           if (!open) setSelected(null);
         }}
       >
-        <DialogContent className="sm:max-w-4xl max-h-[88dvh] overflow-y-auto p-6">
+        <DialogContent
+          finalFocus={url.returnFocus}
+          className="sm:max-w-4xl max-h-[88dvh] overflow-y-auto p-6"
+        >
           <DialogTitle className="text-xl">
             {selectedTrip ? 'Trip evidence' : 'Source record'} · {selected?.id}
           </DialogTitle>
@@ -890,6 +962,10 @@ export default function SampleDashboard({ input }: { input: SampleInput }) {
             {selected?.source} · {selected?.sheet} · row {selected?.row}.
             Original register images were not supplied.
           </DialogDescription>
+          <details>
+            <summary>Original source values</summary>
+            <pre className="json-view">{JSON.stringify(selected, null, 2)}</pre>
+          </details>
           {selectedTrip ? (
             <>
               <div className="evidence-grid">
@@ -901,11 +977,18 @@ export default function SampleDashboard({ input }: { input: SampleInput }) {
                     <Detail label="Vehicle" value={selectedTrip.vehicle} />
                     <Detail
                       label="Original departure date"
-                      value={selectedTrip.date}
+                      value={
+                        shortDate(selectedTrip.dateISO) + ' · time not recorded'
+                      }
                     />
                     <Detail
                       label="Original return date"
-                      value={selectedTrip.returnDate}
+                      value={
+                        selectedTrip.returnISO
+                          ? shortDate(selectedTrip.returnISO) +
+                            ' · time not recorded'
+                          : 'Not recorded'
+                      }
                     />
                     <Detail
                       label="Destination"
@@ -965,6 +1048,35 @@ export default function SampleDashboard({ input }: { input: SampleInput }) {
                 const b = records.zoho.find((b) => b.id === c.id)!;
                 return (
                   <section className="candidate" key={c.id}>
+                    <div className="historical-comparison">
+                      <strong>Field</strong>
+                      <strong>Register</strong>
+                      <strong>Booking candidate</strong>
+                      {[
+                        ['Employee', selectedTrip.employee, b.employee],
+                        ['Driver', selectedTrip.driver, b.driver],
+                        ['Vehicle', selectedTrip.vehicle, b.vehicle],
+                        [
+                          'Date',
+                          shortDate(selectedTrip.dateISO),
+                          shortDate(b.dateISO),
+                        ],
+                        [
+                          'Destination',
+                          selectedTrip.destination,
+                          b.destination,
+                        ],
+                      ].map(([label, actual, booked]) => (
+                        <div
+                          className="historical-comparison-row"
+                          key={String(label)}
+                        >
+                          <b>{text(label)}</b>
+                          <span>{text(actual)}</span>
+                          <span>{text(booked)}</span>
+                        </div>
+                      ))}
+                    </div>
                     <div className="section-heading">
                       <h3>{text(b.employee)}</h3>
                       <Badge value={c.basis} />

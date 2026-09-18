@@ -1,5 +1,17 @@
 'use client';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { LatestRequest } from '@/lib/latest-request';
+import { useFleetNavigation, useDebounced } from './fleet-navigation';
+import {
+  FleetOverview,
+  RegisterWorkspace,
+  BookingWorkspace,
+  FuelWorkspace,
+} from './fleet-records';
+import { UploadWorkspace } from './fleet-uploads';
+import { RecordDetail, clearReviewDrafts } from './fleet-review';
+import { SearchPicker } from './fleet-ui';
+import { METRIC_LABELS, ISSUE_LABELS } from '@/lib/reporting';
 import {
   CarFront,
   LayoutDashboard,
@@ -13,11 +25,15 @@ import {
   ArrowUpRight,
   Download,
   AlertCircle,
-  ChevronRight,
   LogOut,
   LockKeyhole,
   Bell,
   ExternalLink,
+  ArrowRight,
+  Check,
+  X,
+  SlidersHorizontal,
+  Database,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -31,25 +47,13 @@ import {
   SidebarMenuButton,
   SidebarProvider,
   SidebarTrigger,
+  useSidebar,
 } from '@/components/ui/sidebar';
-import { TableRow, TableCell } from '@/components/ui/table';
-import { PERMISSIONS, type Trip } from '@/lib/domain';
-import {
-  api,
-  Badge,
-  Picker,
-  DataTable,
-  Field,
-  fmt,
-  money,
-  date,
-  display,
-} from './fleet-ui';
-import {
-  RegisterReview,
-  PermissionReview,
-  SettingsPanel,
-} from './fleet-workspaces';
+import { Skeleton } from '@/components/ui/skeleton';
+
+import { PERMISSIONS } from '@/lib/domain';
+import { api, Badge, Picker, Field, date } from './fleet-ui';
+import { SettingsPanel } from './fleet-workspaces';
 
 const NAV = [
   ['Overview', LayoutDashboard],
@@ -62,53 +66,187 @@ const NAV = [
   ['Settings', Settings],
 ] as const;
 type View = (typeof NAV)[number][0];
+const VIEW_COPY: Record<View, [string, string]> = {
+  Overview: [
+    'Fleet overview',
+    'Vehicle activity, approvals and costs. One place to stay on top of it all.',
+  ],
+  Bookings: [
+    'Bookings',
+    'Plan ahead with a clear view of requested and approved journeys.',
+  ],
+  'Trip register': [
+    'Trip register',
+    'Follow every recorded journey, from departure to return.',
+  ],
+  'Fuel & expenses': [
+    'Fuel & expenses',
+    'Track fuel purchases and vehicle costs against the original records.',
+  ],
+  'Permission review': [
+    'Permission review',
+    'Resolve missing approvals and conflicting journey details.',
+  ],
+  'Register uploads': [
+    'Register uploads',
+    'Turn your paper registers into checked, searchable records.',
+  ],
+  Alerts: [
+    'Attention queue',
+    'Follow up on the records and connections that need your attention.',
+  ],
+  Settings: [
+    'Workspace settings',
+    'Connect your data, manage access and keep your workspace up to date.',
+  ],
+};
+function ContinueSetup({ select }: { select: (v: View) => void }) {
+  const { setOpenMobile } = useSidebar();
+  return (
+    <button
+      className="connection-link"
+      onClick={() => {
+        select('Settings');
+        setOpenMobile(false);
+      }}
+    >
+      Continue setup <ArrowRight size={14} />
+    </button>
+  );
+}
+function WorkspaceNavigation({
+  view,
+  select,
+  admin,
+  reviewCount,
+}: {
+  view: View;
+  select: (v: View) => void;
+  admin: boolean;
+  reviewCount: number;
+}) {
+  const { setOpenMobile, isMobile } = useSidebar();
+  return (
+    <nav className="workspace-navigation" aria-label="Main navigation">
+      {isMobile && (
+        <button
+          className="mobile-nav-close"
+          aria-label="Close navigation"
+          onClick={() => setOpenMobile(false)}
+        >
+          <X size={20} />
+        </button>
+      )}
+      {[
+        { label: 'Workspace', items: NAV.slice(0, 6) },
+        {
+          label: 'Manage',
+          items: NAV.slice(6).filter(([v]) => v !== 'Settings' || admin),
+        },
+      ].map((group) => (
+        <div className="nav-group" key={group.label}>
+          <p className="nav-label">{group.label}</p>
+          <SidebarMenu>
+            {group.items.map(([v, Icon]) => (
+              <SidebarMenuItem key={v}>
+                <SidebarMenuButton
+                  isActive={view === v}
+                  aria-current={view === v ? 'page' : undefined}
+                  onClick={() => {
+                    select(v);
+                    setOpenMobile(false);
+                  }}
+                >
+                  <Icon />
+                  <span>{v}</span>
+                  {v === 'Permission review' && reviewCount > 0 && (
+                    <span className="nav-count">{reviewCount}</span>
+                  )}
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            ))}
+          </SidebarMenu>
+        </div>
+      ))}
+    </nav>
+  );
+}
 export default function Dashboard() {
-  const [view, setView] = useState<View>('Overview'),
-    [data, setData] = useState<any>(null),
-    [filters, setFilters] = useState<Record<string, string>>({}),
+  const nav = useFleetNavigation(NAV.map(([v]) => v));
+  const view = nav.view as View,
+    filters = nav.filters;
+  const [data, setData] = useState<any>(null),
     [busy, setBusy] = useState(false),
     [loading, setLoading] = useState(true),
+    [updating, setUpdating] = useState(false),
+    [requestError, setRequestError] = useState(''),
     [error, setError] = useState(''),
     [notice, setNotice] = useState(''),
     [auth, setAuth] = useState(0),
-    [alerts, setAlerts] = useState<any[]>([]),
-    [rowId, setRowId] = useState<string | null>(null),
-    [tripId, setTripId] = useState<string | null>(null),
-    [uploadKind, setUploadKind] = useState('movement');
-  const query = new URLSearchParams(
-    Object.entries(filters).filter(([, v]) => v),
-  ).toString();
+    [alerts, setAlerts] = useState<any[]>([]);
+  const requests = useRef(new LatestRequest<Awaited<ReturnType<typeof api>>>());
+  const search = useDebounced(filters.q ?? '');
+  const query = new URLSearchParams({
+    ...Object.fromEntries(
+      Object.entries(filters).filter(([k, v]) => k !== 'q' && v),
+    ),
+    ...(search ? { q: search } : {}),
+    page: String(nav.page),
+    pageSize: String(nav.pageSize),
+    sort: nav.sort,
+    direction: nav.direction,
+  }).toString();
   const load = useCallback(async () => {
-    try {
-      setData(await api('snapshot?' + query));
-      setAuth(0);
-    } catch (e: any) {
-      setError(e.message);
-      setAuth(e.status ?? 0);
-      if (e.status === 401 || e.status === 403) setData(null);
-    } finally {
-      setLoading(false);
-    }
+    setUpdating(true);
+    await requests.current.run(
+      (signal) => api('snapshot?' + query, undefined, signal),
+      (result) => {
+        setData(result);
+        setAuth(0);
+        setRequestError('');
+      },
+      (caught) => {
+        const e = caught as Error & { status?: number };
+        setRequestError(e.message);
+        setAuth(e.status ?? 0);
+        if (e.status === 401 || e.status === 403) {
+          setData(null);
+          setAlerts([]);
+          clearReviewDrafts();
+        }
+      },
+      () => {
+        setLoading(false);
+        setUpdating(false);
+      },
+    );
   }, [query]);
   useEffect(() => {
     void load();
+    return () => requests.current.cancel();
   }, [load]);
   useEffect(() => {
-    const timer = setInterval(() => void load(), 60000);
+    const timer = setInterval(() => {
+      if (document.visibilityState === 'visible') void load();
+    }, 60000);
     return () => clearInterval(timer);
   }, [load]);
   useEffect(() => {
-    if (view === 'Alerts')
-      api('alerts')
-        .then((s) => setAlerts(s.alerts))
-        .catch((e) => setError(e.message));
-  }, [view]);
+    if (view !== 'Alerts' || !data) return;
+    const c = new AbortController();
+    void api('alerts', undefined, c.signal)
+      .then((s) => setAlerts(s.alerts))
+      .catch((e) => {
+        if (e.name !== 'AbortError') setError(e.message);
+      });
+    return () => c.abort();
+  }, [view, !!data]);
   const role = data?.user?.role,
+    admin = role === 'Administrator',
     canUpload = ['Administrator', 'Manager', 'Register operator'].includes(
       role ?? '',
     ),
-    canReview = ['Administrator', 'Manager'].includes(role ?? ''),
-    admin = role === 'Administrator';
+    canReview = ['Administrator', 'Manager'].includes(role ?? '');
   const run = async (work: () => Promise<any>, message = 'Saved.') => {
     setBusy(true);
     setError('');
@@ -116,41 +254,52 @@ export default function Dashboard() {
       await work();
       await load();
       setNotice(message);
+      return true;
     } catch (e: any) {
       setError(e.message);
+      return false;
     } finally {
       setBusy(false);
     }
   };
-  function filter(key: string, value: string) {
-    setFilters((f) => ({ ...f, [key]: value }));
-  }
-  function drill(next: View, key?: string, value?: string) {
-    setView(next);
-    setFilters((f) => {
-      const next = { ...f };
-      delete next.metric;
-      delete next.permission;
-      if (key) next[key] = value ?? '';
-      return next;
+  const fresh = data?.freshness,
+    m = data?.metrics ?? {};
+  const filter = (key: string, value: string) =>
+    nav.setFilters((f) => ({ ...f, [key]: value }));
+  const drill = (next: string, key?: string, value?: string) =>
+    nav.write({
+      view: next,
+      metric: null,
+      outcome: null,
+      page: null,
+      detail: null,
+      id: null,
+      ...(key
+        ? { [key === 'permission' ? 'outcome' : key]: value || null }
+        : {}),
     });
-  }
-  async function sync() {
+  async function sync(mode?: unknown) {
     await run(async () => {
-      await api('sync', { mode: 'full' });
+      if (!['syncing', 'retrying'].includes(fresh?.sync?.status))
+        await api('sync', {
+          mode: mode === 'incremental' ? 'incremental' : 'full',
+        });
       for (let i = 0; i < 10000; i++) {
         const result = await api('sync', { step: true });
         await load();
         if (result.done || result.retryAt || result.error || result.busy) break;
       }
-    }, 'Synchronization status updated.');
+    }, 'Synchronization status updated. The last complete import remains available.');
   }
   useEffect(() => {
     if (view !== 'Register uploads' || !canUpload) return;
     const pending =
       data?.documents?.filter((d: any) => d.status === 'extracting') ?? [];
     if (!pending.length) return;
+    let active = false;
     const timer = setInterval(() => {
+      if (active || document.visibilityState !== 'visible') return;
+      active = true;
       void (async () => {
         try {
           for (const doc of pending.slice(0, 3))
@@ -158,133 +307,80 @@ export default function Dashboard() {
           await load();
         } catch (e: any) {
           setError(e.message);
+        } finally {
+          active = false;
         }
       })();
-    }, 8000);
+    }, 10000);
     return () => clearInterval(timer);
   }, [view, data?.documents, canUpload, load]);
-  const m = data?.metrics ?? {},
-    fresh = data?.freshness,
-    rows = data?.trips ?? [];
-  const kpis = [
-    [
-      'Recorded trips',
-      fmt(m.trips),
-      'Confirmed, deduplicated records',
-      'Trip register',
-      'metric',
-      '',
-    ],
-    [
-      'Matched prior approval',
-      fmt(m.matched),
-      `Of ${fmt(m.trips)} recorded trips`,
-      'Trip register',
-      'permission',
-      PERMISSIONS[0],
-    ],
-    [
-      'Trips requiring review',
-      fmt(m.review),
-      'Missing or conflicting evidence',
-      'Permission review',
-      'metric',
-      'review',
-    ],
-    [
-      'Confirmed unauthorized',
-      fmt(m.unauthorized),
-      'Human decision with a reason',
-      'Permission review',
-      'permission',
-      PERMISSIONS[4],
-    ],
-    [
-      'Recorded distance',
-      fmt(m.distance, 1) + ' km',
-      `${fmt(m.distanceExcluded)} trips excluded`,
-      'Trip register',
-      'metric',
-      'distance',
-    ],
-    [
-      'Fuel purchased',
-      fmt(m.litres, 2) + ' L',
-      `${fmt(m.fuelQuantityExcluded)} quantities missing`,
-      'Fuel & expenses',
-    ],
-    [
-      'Fuel spend',
-      money(m.spend),
-      `${fmt(m.fuelAmountExcluded)} amounts missing`,
-      'Fuel & expenses',
-    ],
-    [
-      'Open trips',
-      fmt(m.open),
-      'In progress or overdue',
-      'Trip register',
-      'metric',
-      'open',
-    ],
-    [
-      'Pending image reviews',
-      fmt(m.pending),
-      'Documents awaiting confirmation',
-      'Register uploads',
-    ],
-  ];
-  const tripTable = (items: Trip[]) => (
-    <DataTable
-      headers={[
-        'Employee & source',
-        'Vehicle / destination',
-        'Recorded journey · IST',
-        'Distance',
-        'Trip status',
-        'Permission',
-        '',
-      ]}
-      empty={!items.length}
-    >
-      {items.map((t) => (
-        <TableRow key={t.id}>
-          <TableCell>
-            <b>{display(t.employee)}</b>
-            <small>
-              {display(t.driver)} · {t.source}
-            </small>
-          </TableCell>
-          <TableCell>
-            <b>{display(t.vehicleId)}</b>
-            <small>{display(t.destination)}</small>
-          </TableCell>
-          <TableCell>
-            {date(t.departure)}
-            <small>Return: {date(t.returnAt)}</small>
-          </TableCell>
-          <TableCell>{fmt(t.distance, 1)} km</TableCell>
-          <TableCell>
-            <Badge text={t.tripStatus ?? 'Incomplete information'} />
-          </TableCell>
-          <TableCell>
-            <Badge text={t.permission ?? PERMISSIONS[3]} />
-          </TableCell>
-          <TableCell>
-            <Button
-              variant="ghost"
-              onClick={() => setTripId(t.id)}
-              aria-label={`Inspect trip for ${t.employee ?? 'unknown employee'}`}
-            >
-              <ChevronRight />
-            </Button>
-          </TableCell>
-        </TableRow>
-      ))}
-    </DataTable>
-  );
+  const activeFilters = Object.entries(filters).filter(([, v]) => v);
+  const filterLabels: Record<string, string> = {
+    from: 'From',
+    to: 'To',
+    vehicleId: 'Vehicle',
+    employee: 'Employee',
+    employeeId: 'Employee',
+    driver: 'Driver',
+    driverId: 'Driver',
+    department: 'Department',
+    destination: 'Destination',
+    permission: 'Permission',
+    outcome: 'Reconciliation outcome',
+    source: 'Source',
+    q: 'Search',
+    metric: 'View',
+    issue: 'Issue',
+  };
+  const currentType =
+    view === 'Bookings'
+      ? filters.metric === 'no-usage'
+        ? 'noUsage'
+        : 'bookings'
+      : view === 'Fuel & expenses'
+        ? 'fuel'
+        : 'trips';
+  const exportQuery = new URLSearchParams(query);
+  exportQuery.set('type', currentType);
+  const connectionLabel = !data
+    ? 'Awaiting authorized access'
+    : fresh?.sync?.status === 'failed'
+      ? 'Sync failed · showing last complete import'
+      : fresh?.sync?.status === 'retrying'
+        ? 'Sync delayed · retry scheduled'
+        : fresh?.sync?.status === 'syncing'
+          ? 'Synchronization running'
+          : !fresh?.lastSuccess
+            ? fresh?.connected
+              ? 'First import pending'
+              : 'Zoho setup incomplete'
+            : fresh?.stale
+              ? 'Last import is stale'
+              : 'Last complete import available';
+  const hasFilters = [
+    'Overview',
+    'Bookings',
+    'Trip register',
+    'Fuel & expenses',
+    'Permission review',
+  ].includes(view);
+  const preset = (days: number | null) => {
+    if (days === null) {
+      nav.setFilters((f) => ({ ...f, from: '', to: '' }));
+      return;
+    }
+    const today = new Date();
+    const to = today.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    const from = new Date(
+      Date.parse(to + 'T00:00:00+05:30') - (days - 1) * 86400000,
+    ).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    nav.setFilters((f) => ({ ...f, from, to }));
+  };
   return (
-    <SidebarProvider>
+    <SidebarProvider className="fleet-shell">
+      <a className="skip-link" href="#fleet-main">
+        Skip to main content
+      </a>
       <Sidebar className="fleet-sidebar">
         <SidebarHeader>
           <div className="brand">
@@ -292,50 +388,31 @@ export default function Dashboard() {
               <CarFront size={23} />
             </span>
             <div>
-              Fleet Desk<small>COMPANY VEHICLES</small>
+              Fleet Desk<small>MCCIA · Vehicle operations</small>
             </div>
           </div>
         </SidebarHeader>
         <SidebarContent>
-          <p className="nav-label">WORKSPACE</p>
-          <SidebarMenu>
-            {NAV.filter(([v]) => v !== 'Settings' || admin).map(([v, Icon]) => (
-              <SidebarMenuItem key={v}>
-                <SidebarMenuButton
-                  isActive={view === v}
-                  onClick={() => setView(v)}
-                >
-                  <Icon />
-                  <span>{v}</span>
-                  {v === 'Permission review' && m.review > 0 && (
-                    <span className="nav-count">{m.review}</span>
-                  )}
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            ))}
-          </SidebarMenu>
+          <WorkspaceNavigation
+            view={view}
+            select={nav.setView}
+            admin={admin}
+            reviewCount={m.review ?? 0}
+          />
         </SidebarContent>
         <SidebarFooter>
           <div className="connection">
-            <span
-              className={
-                'connection-dot ' + (fresh?.connected ? 'connected' : '')
-              }
-            />
-            {fresh?.connected
-              ? 'Zoho connection configured'
-              : 'Zoho not connected'}
+            <strong>{connectionLabel}</strong>
             <small>
               {fresh?.lastSuccess
-                ? 'Last sync: ' + date(fresh.lastSuccess)
-                : 'Awaiting first successful import'}
+                ? date(fresh.lastSuccess) + ' IST'
+                : 'No successful sync yet'}
             </small>
+            {admin && !fresh?.lastSuccess && (
+              <ContinueSetup select={nav.setView} />
+            )}
           </div>
-          <a
-            href="/source-preview"
-            className="text-link"
-            style={{ margin: '8px 16px' }}
-          >
+          <a href="/source-preview" className="text-link historical-link">
             Historical file preview <ExternalLink size={14} />
           </a>
           <div className="profile">
@@ -358,34 +435,32 @@ export default function Dashboard() {
           </div>
         </SidebarFooter>
       </Sidebar>
-      <main className="workspace">
+      <main className="workspace" id="fleet-main" tabIndex={-1}>
         <header className="topbar">
           <div className="flex items-center gap-3">
             <SidebarTrigger />
             <span>
-              Workspace <span className="slash">/</span>
+              <span className="breadcrumb-root">MCCIA / </span>
               {view}
             </span>
           </div>
           <span className="demo-label">
-            <LockKeyhole size={13} /> PRIVATE · IST
+            <LockKeyhole size={13} />
+            Private workspace · IST
           </span>
         </header>
         <div className="page-content">
           <div className="page-heading">
             <div>
-              <h1>{view}</h1>
+              <p className="eyebrow">MCCIA / VEHICLE OPERATIONS</p>
+              <h1>{VIEW_COPY[view][0]}</h1>
               <p className="muted">
                 {view === 'Overview'
-                  ? 'A clear record of permission, journeys and vehicle costs.'
-                  : view === 'Register uploads'
-                    ? 'Keep the original. Check the handwriting. Confirm the record.'
-                    : view === 'Permission review'
-                      ? 'Review the evidence before making a permission decision.'
-                      : 'Company vehicle records · India Standard Time'}
+                  ? 'Recorded vehicle status, approvals and outstanding work.'
+                  : VIEW_COPY[view][1]}
               </p>
             </div>
-            <div className="flex gap-2 flex-wrap">
+            <div className="heading-actions">
               {data &&
                 [
                   'Trip register',
@@ -393,923 +468,503 @@ export default function Dashboard() {
                   'Bookings',
                   'Permission review',
                 ].includes(view) && (
-                  <Button
-                    variant="outline"
-                    onClick={() => {
-                      window.location.href =
-                        '/api/fleet/export?' +
-                        query +
-                        '&type=' +
-                        (view === 'Fuel & expenses'
-                          ? 'fuel'
-                          : view === 'Bookings'
-                            ? 'bookings'
-                            : 'trips');
-                    }}
+                  <a
+                    className="export-link"
+                    href={'/api/fleet/export?' + exportQuery}
+                    title="Export all authorized matching records, including other pages"
                   >
-                    <Download />
-                    Export CSV
-                  </Button>
+                    <Download size={16} />
+                    Export CSV · {data.counts[currentType]}
+                  </a>
                 )}
-              {admin && (
+              {admin && fresh?.connected && (
                 <Button
                   variant="outline"
-                  disabled={busy || !fresh?.connected}
-                  onClick={sync}
+                  disabled={busy}
+                  onClick={() => void sync()}
                 >
-                  <RefreshCw className={busy ? 'spin' : ''} />
-                  Sync now
+                  <RefreshCw className={busy ? 'spin' : ''} />{' '}
+                  {['syncing', 'retrying'].includes(fresh.sync?.status)
+                    ? 'Resume sync'
+                    : 'Sync now'}
                 </Button>
               )}
-              {canUpload && (
+              {canUpload && view !== 'Settings' && (
                 <Button
-                  className="primary-action"
-                  onClick={() => setView('Register uploads')}
+                  onClick={() =>
+                    view === 'Register uploads'
+                      ? document.getElementById('fleet-upload-input')?.click()
+                      : nav.setView('Register uploads')
+                  }
                 >
-                  <Upload />
+                  <Upload size={16} />
                   Upload registers
                 </Button>
               )}
             </div>
           </div>
-          {error && (
+          {(error || requestError) && (
             <div role="alert" className="error-banner">
               <AlertCircle size={18} />
-              <span>{error}</span>
-              <Button variant="ghost" onClick={() => setError('')}>
-                Dismiss
-              </Button>
+              <div>
+                {error || requestError}
+                {data && requestError && (
+                  <small>Showing previously retrieved records.</small>
+                )}
+              </div>
+              {requestError && (
+                <Button variant="outline" onClick={() => void load()}>
+                  Retry
+                </Button>
+              )}
+              {error && (
+                <Button variant="ghost" onClick={() => setError('')}>
+                  Dismiss
+                </Button>
+              )}
             </div>
           )}
           {notice && (
             <div role="status" className="notice">
-              {notice}
+              <Check size={18} />
+              <span>{notice}</span>
+              <Button
+                variant="ghost"
+                aria-label="Dismiss notification"
+                onClick={() => setNotice('')}
+              >
+                <X size={16} />
+              </Button>
             </div>
           )}
-          {!data && (
+          {!data && loading && (
+            <section
+              aria-label="Loading workspace"
+              aria-busy="true"
+              className="dashboard-loading"
+            >
+              <div className="loading-metrics">
+                {[0, 1, 2, 3].map((i) => (
+                  <Skeleton key={i} className="loading-tile" />
+                ))}
+              </div>
+              <Skeleton className="loading-panel" />
+            </section>
+          )}
+          {!data && !loading && (
             <section className="panel sign-in">
               <LockKeyhole size={32} />
               <h2>
-                {loading
-                  ? 'Loading your private workspace'
-                  : auth === 403
-                    ? 'Access has not been granted'
-                    : 'Your fleet records stay private'}
+                {auth === 403
+                  ? 'Access has not been granted'
+                  : auth === 401
+                    ? 'Sign in to Fleet Desk'
+                    : 'Records are temporarily unavailable'}
               </h2>
-              <p className="muted">
-                {loading
-                  ? 'Checking your account and retrieving saved records.'
-                  : auth === 403
-                    ? 'Ask the Fleet Desk administrator to add your account.'
-                    : 'Sign in with an authorized account to view records, attachments and reports.'}
+              <p>
+                {auth === 403
+                  ? 'Ask the Fleet Desk administrator to grant your account access.'
+                  : auth === 401
+                    ? 'Use an authorized account to view company records and attachments.'
+                    : 'Retry the connection. Saved records have not been removed.'}
               </p>
-              {!loading && auth !== 403 && (
+              {auth === 401 && (
                 <a
                   className="signin-link"
-                  href="/signin-with-chatgpt?return_to=/"
+                  href={
+                    '/signin-with-chatgpt?return_to=' +
+                    encodeURIComponent(
+                      '/' +
+                        (typeof window !== 'undefined'
+                          ? window.location.search
+                          : ''),
+                    )
+                  }
                   target="_top"
                 >
                   Sign in with ChatGPT <ArrowUpRight size={16} />
                 </a>
               )}
-              {!loading && (
-                <Button variant="outline" onClick={() => void load()}>
-                  Retry connection
-                </Button>
-              )}
+              <Button variant="outline" onClick={() => void load()}>
+                Retry connection
+              </Button>
             </section>
           )}
           {data && (
             <>
-              {(!fresh.connected ||
-                !fresh.lastSuccess ||
-                fresh.stale ||
-                ['failed', 'retrying'].includes(fresh.sync?.status)) && (
-                <div className="status-banner">
-                  <AlertCircle size={18} />
-                  <div>
-                    <strong>
-                      {!fresh.connected
-                        ? 'Ready for your real records'
-                        : fresh.stale
-                          ? 'Zoho data may be stale'
-                          : fresh.sync?.status === 'failed'
-                            ? 'Synchronization needs attention'
-                            : 'Waiting for the first complete import'}
-                    </strong>
-                    <p>
+              {data.fixtureMode && (
+                <div className="fixture-banner" role="note">
+                  TEST WORKSPACE · Synthetic records for interface verification.
+                  Not company activity. External integrations are disabled.
+                </div>
+              )}
+              {view !== 'Settings' && (
+                <details
+                  className={
+                    'freshness-summary ' +
+                    (fresh.stale ||
+                    ['failed', 'retrying'].includes(fresh.sync?.status)
+                      ? 'needs-attention'
+                      : '')
+                  }
+                >
+                  <summary>
+                    <Database size={15} />
+                    <strong>{connectionLabel}</strong>
+                    <span>
                       {fresh.lastSuccess
-                        ? `Last successful sync: ${date(fresh.lastSuccess)} IST. Existing records remain available.`
-                        : 'Zoho data has not been imported. No sample trips, permissions or expenses are included.'}
+                        ? date(fresh.lastSuccess) + ' IST'
+                        : 'No successful sync yet'}
+                    </span>
+                    {updating && <span>Updating view…</span>}
+                  </summary>
+                  <p>
+                    {fresh.lastSuccess
+                      ? 'Records from the last completed import remain available.'
+                      : 'Register uploads and manual review work independently of the Zoho connection.'}{' '}
+                    Availability is based on recorded evidence, not live
+                    telemetry.
+                  </p>
+                  {fresh.sync && (
+                    <p>
+                      Latest run: {fresh.sync.status} · {fresh.sync.count ?? 0}{' '}
+                      records · {fresh.sync.pages ?? 0} pages
+                      {fresh.sync.error ? ' · ' + fresh.sync.error : ''}
                     </p>
-                  </div>
+                  )}
                   {admin && (
-                    <Button variant="ghost" onClick={() => setView('Settings')}>
-                      Connection settings <ArrowUpRight />
+                    <Button
+                      variant="ghost"
+                      onClick={() => nav.setView('Settings')}
+                    >
+                      Connection settings
                     </Button>
                   )}
-                </div>
+                </details>
               )}
-              {fresh.sync?.status === 'syncing' && (
-                <div className="notice" role="status">
-                  Syncing · {fresh.sync.count} records staged across{' '}
-                  {fresh.sync.pages} pages. The last complete import stays
-                  visible.
-                </div>
-              )}
-              {[
-                'Overview',
-                'Bookings',
-                'Trip register',
-                'Fuel & expenses',
-                'Permission review',
-              ].includes(view) && (
-                <section
-                  className="global-filters"
-                  aria-label="Global record filters"
-                >
-                  <Field label="From">
-                    <Input
-                      aria-label="Start date"
-                      type="date"
-                      value={filters.from ?? ''}
-                      onChange={(e) => filter('from', e.target.value)}
-                    />
-                  </Field>
-                  <Field label="To">
-                    <Input
-                      aria-label="End date"
-                      type="date"
-                      value={filters.to ?? ''}
-                      onChange={(e) => filter('to', e.target.value)}
-                    />
-                  </Field>
-                  <Field label="Vehicle">
-                    <Picker
-                      label="Filter vehicle"
-                      value={filters.vehicleId ?? ''}
-                      onChange={(v) => filter('vehicleId', v)}
-                      options={[
-                        { value: '', label: 'All vehicles' },
-                        ...data.vehicles.map((v: any) => ({
-                          value: v.registration ?? v.id,
-                          label: v.registration ?? v.name ?? v.id,
-                        })),
-                      ]}
-                    />
-                  </Field>
-                  <Field label="Employee">
-                    <Input
-                      placeholder="All employees"
-                      value={filters.employee ?? ''}
-                      onChange={(e) => filter('employee', e.target.value)}
-                    />
-                  </Field>
-                  <details className="more-filters">
-                    <summary>
-                      More filters (
-                      {Object.values(filters).filter(Boolean).length})
-                    </summary>
-                    <div className="expanded-filters">
-                      {['driver', 'department'].map((k) => (
-                        <Field key={k} label={k}>
-                          <Input
-                            value={filters[k] ?? ''}
-                            onChange={(e) => filter(k, e.target.value)}
-                            placeholder={'All ' + k + 's'}
-                          />
-                        </Field>
-                      ))}
-                      <Field label="Permission">
-                        <Picker
-                          label="Permission status"
-                          value={filters.permission ?? ''}
-                          onChange={(v) => filter('permission', v)}
-                          options={[
-                            { value: '', label: 'All permission outcomes' },
-                            ...PERMISSIONS.map((p) => ({ value: p, label: p })),
-                          ]}
-                        />
-                      </Field>
-                      <Field label="Data source">
-                        <Picker
-                          label="Data source"
-                          value={filters.source ?? ''}
-                          onChange={(v) => filter('source', v)}
-                          options={[
-                            { value: '', label: 'All sources' },
-                            { value: 'zoho', label: 'Zoho Creator' },
-                            { value: 'register', label: 'Confirmed register' },
-                          ]}
-                        />
-                      </Field>
-                      <Field label="Search">
-                        <Input
-                          value={filters.q ?? ''}
-                          onChange={(e) => filter('q', e.target.value)}
-                          placeholder="Reference or destination"
-                        />
-                      </Field>
-                    </div>
-                  </details>
-                  <Button variant="ghost" onClick={() => setFilters({})}>
-                    Reset
-                  </Button>
+              {view === 'Overview' && !data.hasRecords ? (
+                <section className="panel first-import-state">
+                  <Database size={28} />
+                  <h2>No records imported</h2>
+                  <p>
+                    Connect Zoho Creator or upload an original register.
+                    Confirmed records will populate vehicle status and reports.
+                  </p>
+                  {admin ? (
+                    <Button onClick={() => nav.setView('Settings')}>
+                      Set up Zoho Creator <ArrowRight size={15} />
+                    </Button>
+                  ) : canUpload ? (
+                    <Button onClick={() => nav.setView('Register uploads')}>
+                      Upload your first register
+                    </Button>
+                  ) : (
+                    <p>
+                      Ask your administrator to connect the company reports.
+                    </p>
+                  )}
                 </section>
-              )}
-              {view === 'Overview' && (
+              ) : (
                 <>
-                  <section className="metrics expanded-metrics">
-                    {kpis.map((k) => (
-                      <button
-                        key={k[0]}
-                        className="metric"
-                        onClick={() => drill(k[3] as View, k[4], k[5])}
-                      >
-                        <span className="metric-label">
-                          {k[0]}
-                          <ArrowUpRight size={15} />
-                        </span>
-                        <strong>{k[1]}</strong>
-                        <small>{k[2]}</small>
-                      </button>
-                    ))}
-                  </section>
-                  <div className="section-heading">
-                    <h2>Your two vehicles</h2>
-                    <span className="muted">
-                      Last recorded state · not live tracking
-                    </span>
-                  </div>
-                  <section className="vehicle-grid">
-                    {Array.from(
-                      { length: Math.max(2, data.vehicles.length) },
-                      (_, i) => data.vehicles[i] ?? null,
-                    ).map((v: any, i) => (
-                      <article className="vehicle" key={v?.id ?? i}>
-                        <div className="vehicle-heading">
-                          <span className="vehicle-icon">
-                            <CarFront size={25} />
-                          </span>
-                          <div>
-                            <h3>
-                              {v?.name ??
-                                `Vehicle ${String(i + 1).padStart(2, '0')}`}
-                            </h3>
-                            <p className="muted">
-                              {v?.registration ?? 'Registration not connected'}
-                            </p>
-                          </div>
-                          <Badge text={v?.availability ?? 'Unknown'} />
-                        </div>
-                        <div className="vehicle-route">
-                          <div className="vehicle-detail">
-                            <span>Recorded employee</span>
-                            <b>{display(v?.current?.employee)}</b>
-                          </div>
-                          <div className="vehicle-detail">
-                            <span>Recorded driver</span>
-                            <b>{display(v?.current?.driver)}</b>
-                          </div>
-                          <div className="vehicle-detail">
-                            <span>Expected return</span>
-                            <b>{date(v?.current?.expectedReturn)}</b>
-                          </div>
-                          <p className="muted">
-                            State recorded: {date(v?.recordedAt)}
-                          </p>
-                        </div>
-                        <div className="vehicle-footer">
-                          <span>
-                            {fmt(v?.odometer)} km{' '}
-                            <small>confirmed odometer</small>
-                          </span>
-                          <span>
-                            {v?.fuelLevel == null
-                              ? 'Unknown fuel level'
-                              : fmt(v.fuelLevel) + '% fuel'}
-                            <small>{date(v?.fuelLevelAt)}</small>
-                          </span>
-                        </div>
-                      </article>
-                    ))}
-                  </section>
-                  <div className="bottom-grid">
-                    <section className="panel">
-                      <div className="section-heading">
-                        <h2>Trips by vehicle</h2>
-                        <span className="muted">{m.trips} recorded</span>
-                      </div>
-                      {!rows.length ? (
-                        <div className="chart-empty">
-                          <CarFront size={26} />
-                          <p>
-                            Usage patterns will appear after records are
-                            confirmed.
-                          </p>
-                        </div>
-                      ) : (
-                        data.vehicles.map((v: any) => {
-                          const ts = rows.filter(
-                            (t: Trip) =>
-                              t.vehicleId === (v.registration ?? v.id),
-                          );
-                          return (
-                            <button
-                              className="bar-row"
-                              key={v.id}
-                              onClick={() =>
-                                drill(
-                                  'Trip register',
-                                  'vehicleId',
-                                  v.registration ?? v.id,
-                                )
-                              }
-                            >
-                              <span>{v.registration ?? v.name}</span>
-                              <span className="bar-track">
-                                <i
-                                  style={{
-                                    width:
-                                      Math.max(
-                                        2,
-                                        (ts.length / Math.max(1, m.trips)) *
-                                          100,
-                                      ) + '%',
-                                  }}
-                                />
-                              </span>
-                              <strong>{ts.length}</strong>
-                            </button>
-                          );
-                        })
-                      )}
-                      <p className="metric-footnote">
-                        Distance uses confirmed, valid odometer pairs. Unknown
-                        distance stays unknown.
-                      </p>
-                    </section>
-                    <section className="panel">
-                      <div className="section-heading">
-                        <h2>Permission outcomes</h2>
-                        <ShieldCheck size={20} />
-                      </div>
-                      {PERMISSIONS.map((p) => (
-                        <button
-                          className="outcome-row"
-                          key={p}
-                          onClick={() =>
-                            drill('Permission review', 'permission', p)
-                          }
-                        >
-                          <span>{p}</span>
-                          <strong>
+                  {hasFilters && (
+                    <section
+                      className="global-filters compact-filters"
+                      aria-label="Global record filters"
+                    >
+                      <Field label="From">
+                        <Input
+                          type="date"
+                          aria-label="Start date"
+                          value={filters.from ?? ''}
+                          max={filters.to || undefined}
+                          onChange={(e) => filter('from', e.target.value)}
+                        />
+                      </Field>
+                      <Field label="To">
+                        <Input
+                          type="date"
+                          aria-label="End date"
+                          value={filters.to ?? ''}
+                          min={filters.from || undefined}
+                          onChange={(e) => filter('to', e.target.value)}
+                        />
+                      </Field>
+                      <Field label="Vehicle">
+                        <Picker
+                          label="Filter vehicle"
+                          value={filters.vehicleId ?? ''}
+                          onChange={(v) => filter('vehicleId', v)}
+                          options={[
+                            { value: '', label: 'All vehicles' },
+                            ...data.vehicles.map((v: any) => ({
+                              value: v.registration ?? v.id,
+                              label:
+                                [v.name, v.registration]
+                                  .filter(Boolean)
+                                  .join(' · ') || v.id,
+                            })),
                             {
-                              rows.filter((t: Trip) => t.permission === p)
-                                .length
-                            }
-                          </strong>
-                        </button>
-                      ))}
-                    </section>
-                  </div>
-                  <section className="panel bookings-panel recent-panel">
-                    <div className="section-heading">
-                      <h2>Recent recorded journeys</h2>
+                              value: '__unknown',
+                              label: 'Vehicle not recorded',
+                            },
+                          ]}
+                        />
+                      </Field>
+                      <details className="more-filters">
+                        <summary>
+                          <SlidersHorizontal size={15} />
+                          More filters
+                        </summary>
+                        <div className="expanded-filters">
+                          {[
+                            'employee',
+                            'driver',
+                            'department',
+                            'destination',
+                          ].map((k) => (
+                            <Field label={filterLabels[k]} key={k}>
+                              <SearchPicker
+                                label={'Filter ' + k}
+                                value={
+                                  filters[k + 'Id']
+                                    ? 'id:' + filters[k + 'Id']
+                                    : (filters[k] ?? '')
+                                }
+                                onChange={(v) =>
+                                  nav.setFilters((f) => ({
+                                    ...f,
+                                    [k]: v.startsWith('id:') ? '' : v,
+                                    [k + 'Id']: v.startsWith('id:')
+                                      ? v.slice(3)
+                                      : '',
+                                  }))
+                                }
+                                options={[
+                                  { value: '', label: 'All ' + k + 's' },
+                                  ...(data.personOptions?.[k] ??
+                                    (data.options?.[k] ?? []).map(
+                                      (v: string) => ({ value: v, label: v }),
+                                    )),
+                                  { value: '__unknown', label: 'Not recorded' },
+                                ]}
+                              />
+                            </Field>
+                          ))}
+                          <Field label="Permission">
+                            <Picker
+                              label="Permission status"
+                              value={filters.permission ?? ''}
+                              onChange={(v) => filter('permission', v)}
+                              options={[
+                                { value: '', label: 'All permission outcomes' },
+                                ...PERMISSIONS.map((p) => ({
+                                  value: p,
+                                  label: p,
+                                })),
+                              ]}
+                            />
+                          </Field>
+                          <Field label="Data source">
+                            <Picker
+                              label="Data source"
+                              value={filters.source ?? ''}
+                              onChange={(v) => filter('source', v)}
+                              options={[
+                                { value: '', label: 'All sources' },
+                                { value: 'zoho', label: 'Zoho Creator' },
+                                {
+                                  value: 'register',
+                                  label: 'Confirmed register',
+                                },
+                              ]}
+                            />
+                          </Field>
+                          <Field label="Search">
+                            <Input
+                              value={filters.q ?? ''}
+                              onChange={(e) => filter('q', e.target.value)}
+                              placeholder="Reference, person or destination"
+                            />
+                          </Field>
+                        </div>
+                      </details>
                       <Button
                         variant="ghost"
-                        onClick={() => setView('Trip register')}
+                        disabled={!activeFilters.length}
+                        onClick={() => nav.setFilters({})}
                       >
-                        Open register <ArrowUpRight />
+                        Clear filters
                       </Button>
-                    </div>
-                    {tripTable(rows.slice(0, 5))}
-                  </section>
-                  <details className="metric-definitions">
-                    <summary>How these metrics are calculated</summary>
-                    <p>
-                      Trip KPIs count filtered, confirmed, deduplicated trips.
-                      Prior-approval coverage uses all recorded trips as its
-                      denominator. Review includes missing approval, differing
-                      details and insufficient evidence. Unauthorized requires a
-                      current human review decision. Distance excludes missing
-                      or invalid odometer pairs and missing return timestamps.
-                    </p>
-                    <p>
-                      Fuel totals count known purchases independently. Fuel
-                      purchased is not fuel consumed. Km/l:{' '}
-                      <b>Insufficient data</b>. Utilization is not calculated
-                      until available hours and maintenance exclusions are
-                      agreed. Pending image reviews and vehicle panels describe
-                      the whole workspace.
-                    </p>
-                  </details>
-                </>
-              )}
-              {view === 'Trip register' && (
-                <section className="panel bookings-panel">
-                  <div className="section-heading">
-                    <h2>Daily & monthly register</h2>
-                    <span className="muted">
-                      {rows.length} trips · {m.distanceExcluded} distances
-                      excluded
-                    </span>
-                  </div>
-                  {tripTable(rows)}
-                  {data.issues.length > 0 && (
-                    <div className="issue-list">
-                      <h3>Odometer checks</h3>
-                      {data.issues.map((x: any) => (
-                        <button
-                          key={x.tripId + x.message}
-                          onClick={() => setTripId(x.tripId)}
-                        >
-                          {x.message} <ArrowUpRight size={14} />
-                        </button>
-                      ))}
-                      <p className="muted">
-                        Recording gaps are investigation prompts, not findings
-                        of misuse.
-                      </p>
-                    </div>
-                  )}
-                  <div className="usage-groups">
-                    {['employee', 'department'].map((key) => (
-                      <div key={key}>
-                        <h3>Usage by {key}</h3>
+                      <div className="date-presets" aria-label="Date presets">
                         {[
-                          ...new Set<string>(
-                            rows.map((t: any) => t[key]).filter(Boolean),
-                          ),
-                        ].map((name) => (
+                          [1, 'Today'],
+                          [7, 'Last 7 days'],
+                          [30, 'Last 30 days'],
+                          [null, 'All dates'],
+                        ].map(([days, label]) => (
                           <button
-                            className="outcome-row"
-                            key={name}
-                            onClick={() => filter(key, name)}
+                            key={String(label)}
+                            onClick={() => preset(days as number | null)}
                           >
-                            <span>{name}</span>
-                            <b>
-                              {rows.filter((t: any) => t[key] === name).length}{' '}
-                              trips
-                            </b>
+                            {label}
                           </button>
                         ))}
                       </div>
-                    ))}
-                  </div>
-                </section>
-              )}
-              {view === 'Bookings' && (
-                <section className="panel bookings-panel">
-                  <div className="section-heading">
-                    <h2>Zoho booking requests</h2>
-                    <Badge text="Read-only source" />
-                  </div>
-                  <DataTable
-                    headers={[
-                      'Booking / employee',
-                      'Vehicle & driver',
-                      'Requested journey · IST',
-                      'Decision',
-                      'Approval evidence',
-                    ]}
-                    empty={!data.bookings.length}
-                  >
-                    {data.bookings.map((b: any) => (
-                      <TableRow key={b.id}>
-                        <TableCell>
-                          <b>{display(b.bookingRef ?? b.sourceId)}</b>
-                          <small>
-                            {display(b.employee)} · {display(b.department)}
-                          </small>
-                        </TableCell>
-                        <TableCell>
-                          {display(b.vehicleId)}
-                          <small>{display(b.driver)}</small>
-                        </TableCell>
-                        <TableCell>
-                          {date(b.departure)}
-                          <small>{display(b.destination)}</small>
-                        </TableCell>
-                        <TableCell>{display(b.status)}</TableCell>
-                        <TableCell>
-                          {data.approvals
-                            .filter((a: any) =>
-                              [b.id, b.bookingRef, b.sourceId].includes(
-                                a.bookingRef,
-                              ),
-                            )
-                            .map((a: any) => (
-                              <small key={a.id}>
-                                {display(a.decision)} · {date(a.decidedAt)} ·{' '}
-                                {display(a.approver)}
-                              </small>
-                            ))}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </DataTable>
-                  <div className="no-usage">
-                    <h3>
-                      No recorded usage <span>{data.noUsage.length}</span>
-                    </h3>
-                    <p className="muted">
-                      Approved bookings without a linked actual trip. This does
-                      not establish a no-show.
-                    </p>
-                    {data.noUsage.map((b: any) => (
-                      <div className="outcome-row" key={b.id}>
-                        <span>
-                          {display(b.bookingRef)} · {display(b.employee)}
-                        </span>
-                        <span>{date(b.departure)}</span>
-                      </div>
-                    ))}
-                  </div>
-                </section>
-              )}
-              {view === 'Fuel & expenses' && (
-                <section className="panel bookings-panel">
-                  <div className="section-heading">
-                    <h2>Fuel purchases</h2>
-                    <span className="muted">
-                      Purchased {fmt(m.litres, 2)} L · {money(m.spend)}
-                    </span>
-                  </div>
-                  <DataTable
-                    headers={[
-                      'Date',
-                      'Vehicle',
-                      'Quantity',
-                      'Amount',
-                      'Paid by',
-                      'Receipt / source',
-                    ]}
-                    empty={!data.fuel.length}
-                  >
-                    {data.fuel.map((f: any) => (
-                      <TableRow key={f.id}>
-                        <TableCell>
-                          {date(f.registerDate ?? f.departure)}
-                        </TableCell>
-                        <TableCell>{display(f.vehicleId)}</TableCell>
-                        <TableCell>{fmt(f.litres, 2)} L</TableCell>
-                        <TableCell>{money(f.amount)}</TableCell>
-                        <TableCell>{display(f.payer)}</TableCell>
-                        <TableCell>
-                          {display(f.receiptRef)}
-                          <small>{f.source}</small>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </DataTable>
-                  <div className="no-usage">
-                    <h3>Monthly fuel spend</h3>
-                    {[
-                      ...new Set<string>(
-                        data.fuel.map((f: any) =>
-                          (f.registerDate ?? f.departure ?? 'Unknown').slice(
-                            0,
-                            7,
-                          ),
-                        ),
-                      ),
-                    ]
-                      .sort()
-                      .map((month) => (
-                        <button
-                          className="outcome-row"
-                          key={month}
-                          onClick={() => {
-                            if (month !== 'Unknown') {
-                              filter('from', month + '-01');
-                              const end = new Date(
-                                Number(month.slice(0, 4)),
-                                Number(month.slice(5, 7)),
-                                0,
-                              ).getDate();
-                              filter('to', month + '-' + end);
-                            }
-                          }}
-                        >
-                          <span>{month}</span>
-                          <b>
-                            {money(
-                              data.fuel
-                                .filter((f: any) =>
-                                  (
-                                    f.registerDate ??
-                                    f.departure ??
-                                    'Unknown'
-                                  ).startsWith(month),
-                                )
-                                .reduce(
-                                  (sum: number, f: any) =>
-                                    sum + (f.amount ?? 0),
-                                  0,
-                                ),
-                            )}
-                          </b>
-                        </button>
-                      ))}
-                    <p className="muted">
-                      Fuel economy: <b>Insufficient data</b>. A fuel-balance or
-                      full-tank method must be established first. Price
-                      differences do not establish misuse.
-                    </p>
-                  </div>
-                  <h3>Maintenance expenses</h3>
-                  <DataTable
-                    headers={['Date', 'Vehicle', 'Expense', 'Remarks']}
-                    empty={!data.maintenance.length}
-                  >
-                    {data.maintenance.map((r: any) => (
-                      <TableRow key={r.id}>
-                        <TableCell>{date(r.registerDate)}</TableCell>
-                        <TableCell>{display(r.vehicleId)}</TableCell>
-                        <TableCell>{money(r.amount)}</TableCell>
-                        <TableCell>{display(r.remarks)}</TableCell>
-                      </TableRow>
-                    ))}
-                  </DataTable>
-                </section>
-              )}
-              {view === 'Permission review' && (
-                <section className="panel bookings-panel">
-                  <div className="section-heading">
-                    <h2>Booking-to-register reconciliation</h2>
-                    <span className="muted">Rule {data.ruleVersion}</span>
-                  </div>
-                  {tripTable(rows)}
-                  <p className="metric-footnote">
-                    Missing approval evidence always requires review.
-                    Unconfirmed extraction cannot become an unauthorized-use
-                    finding.
-                  </p>
-                </section>
-              )}
-              {view === 'Register uploads' && (
-                <>
-                  <section className="panel upload-panel">
-                    <Upload size={28} />
-                    <div>
-                      <h2>Add register photographs or scans</h2>
-                      <p className="muted">
-                        JPEG, PNG or PDF · up to 10 MB each · originals remain
-                        private
+                      {activeFilters.length > 0 && (
+                        <div className="filter-chips">
+                          {activeFilters.map(([key, value]) => (
+                            <button
+                              key={key}
+                              className="filter-chip"
+                              aria-label={
+                                'Remove ' +
+                                (filterLabels[key] ?? key) +
+                                ' filter'
+                              }
+                              onClick={() => filter(key, '')}
+                            >
+                              {filterLabels[key] ?? key}:{' '}
+                              {value === '__unknown'
+                                ? 'Not recorded'
+                                : key.endsWith('Id') &&
+                                    ['employeeId', 'driverId'].includes(key)
+                                  ? (data.personOptions?.[
+                                      key.slice(0, -2)
+                                    ]?.find(
+                                      (p: { value: string; label: string }) =>
+                                        p.value === 'id:' + value,
+                                    )?.label ?? value)
+                                  : key === 'metric'
+                                    ? (METRIC_LABELS[value] ?? value)
+                                    : key === 'issue'
+                                      ? (ISSUE_LABELS[value] ?? value)
+                                      : value}
+                              <X size={13} />
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      <p className="filter-scope">
+                        Inclusive dates in IST. Trips/bookings use departure or
+                        register date; fuel uses its recorded purchase date.
+                        Missing dates are excluded when a date filter is active.
                       </p>
-                      <p className="muted">
-                        Manual transcription works without an extraction
-                        provider.
-                      </p>
-                    </div>
-                    {canUpload && (
-                      <div className="upload-controls">
-                        <Picker
-                          value={uploadKind}
-                          label="Register type"
-                          onChange={setUploadKind}
-                          options={[
-                            {
-                              value: 'movement',
-                              label: 'Vehicle movement register',
-                            },
-                            { value: 'driver', label: 'Driver logbook' },
-                            { value: 'fuel', label: 'Fuel register' },
-                            { value: 'receipt', label: 'Fuel receipt' },
-                          ]}
-                        />
-                        <Field label="Choose one or more documents">
-                          <Input
-                            type="file"
-                            accept="image/jpeg,image/png,application/pdf"
-                            multiple
-                            disabled={busy}
-                            onChange={(e) => {
-                              const files = Array.from(e.target.files ?? []);
-                              e.target.value = '';
-                              void run(async () => {
-                                const results = [];
-                                for (const file of files) {
-                                  const form = new FormData();
-                                  form.set('file', file);
-                                  form.set('kind', uploadKind);
-                                  const response = await fetch(
-                                    '/api/fleet/upload',
-                                    { method: 'POST', body: form },
-                                  );
-                                  const result: any = await response.json();
-                                  if (!response.ok)
-                                    throw Error(
-                                      `${file.name}: ${result.error}`,
-                                    );
-                                  results.push(result);
-                                }
-                                setNotice(
-                                  `${files.length} processed; ${results.filter((r) => r.duplicate).length} duplicates recognized.`,
-                                );
-                              }, 'Uploads processed; duplicate files reuse the existing document.');
-                            }}
-                          />
-                        </Field>
-                      </div>
-                    )}
-                  </section>
-                  <div className="panel bookings-panel">
-                    <DataTable
-                      headers={[
-                        'Original document',
-                        'State',
-                        'Extracted rows',
-                        'Actions',
-                      ]}
-                      empty={!data.documents.length}
-                    >
-                      {data.documents.map((doc: any) => {
-                        const dr = data.rows.filter(
-                          (r: any) => r.documentId === doc.id,
-                        );
-                        return (
-                          <TableRow key={doc.id}>
-                            <TableCell>
-                              <b>{doc.name}</b>
-                              <small>
-                                {doc.kind} · {fmt(doc.size / 1024)} KB ·{' '}
-                                {date(doc.createdAt)}
-                              </small>
-                              {doc.error && (
-                                <small className="form-error">
-                                  {doc.error}
-                                </small>
-                              )}
-                            </TableCell>
-                            <TableCell>
-                              <Badge text={doc.status} />
-                            </TableCell>
-                            <TableCell>
-                              {dr.map((r: any) => (
-                                <button
-                                  className="row-link"
-                                  key={r.id}
-                                  onClick={() => setRowId(r.id)}
-                                >
-                                  Page {r.page}, row {r.row}{' '}
-                                  <Badge text={r.state} />
-                                </button>
-                              ))}
-                            </TableCell>
-                            <TableCell>
-                              <div className="document-actions">
-                                <a
-                                  className="text-link"
-                                  href={'/api/fleet/document/' + doc.id}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                >
-                                  Original <ExternalLink size={14} />
-                                </a>
-                                {canUpload && (
-                                  <>
-                                    <form
-                                      className="add-row-form"
-                                      onSubmit={(e) => {
-                                        e.preventDefault();
-                                        const f = new FormData(e.currentTarget);
-                                        void run(async () => {
-                                          const rid = await api(
-                                            'draft/' + doc.id,
-                                            {
-                                              page: Number(f.get('page')),
-                                              row: Number(f.get('row')),
-                                            },
-                                          );
-                                          await load();
-                                          setRowId(rid);
-                                        }, 'Draft created. Transcribe the original.');
-                                      }}
-                                    >
-                                      <Input
-                                        type="number"
-                                        name="page"
-                                        min="1"
-                                        defaultValue="1"
-                                        aria-label="Source page"
-                                        required
-                                      />
-                                      <Input
-                                        type="number"
-                                        name="row"
-                                        min="1"
-                                        defaultValue={dr.length + 1}
-                                        aria-label="Source row"
-                                        required
-                                      />
-                                      <Button variant="outline" disabled={busy}>
-                                        Add row
-                                      </Button>
-                                    </form>
-                                    <Button
-                                      variant="ghost"
-                                      disabled={busy}
-                                      onClick={() =>
-                                        void run(
-                                          () =>
-                                            api(
-                                              (doc.status === 'extracting'
-                                                ? 'poll/'
-                                                : 'extract/') + doc.id,
-                                              {},
-                                            ),
-                                          'Extraction status updated.',
-                                        )
-                                      }
-                                    >
-                                      {doc.status === 'extracting'
-                                        ? 'Check extraction'
-                                        : 'Extract'}
-                                    </Button>
-                                  </>
-                                )}
-                              </div>
-                            </TableCell>
-                          </TableRow>
-                        );
-                      })}
-                    </DataTable>
-                  </div>
+                    </section>
+                  )}
+                  {view === 'Overview' && (
+                    <FleetOverview data={data} nav={nav} drill={drill} />
+                  )}
+                  {view === 'Trip register' && (
+                    <RegisterWorkspace data={data} nav={nav} />
+                  )}
+                  {view === 'Permission review' && (
+                    <RegisterWorkspace data={data} nav={nav} review />
+                  )}
+                  {view === 'Bookings' && (
+                    <BookingWorkspace data={data} nav={nav} />
+                  )}
+                  {view === 'Fuel & expenses' && (
+                    <FuelWorkspace data={data} nav={nav} />
+                  )}
                 </>
               )}
+              {
+                <div hidden={view !== 'Register uploads'}>
+                  <UploadWorkspace
+                    data={data}
+                    nav={nav}
+                    canUpload={canUpload}
+                    refresh={load}
+                    run={run}
+                    busy={busy}
+                  />
+                </div>
+              }
               {view === 'Alerts' && (
                 <section className="panel">
                   <div className="section-heading">
-                    <h2>Attention queue</h2>
+                    <h2>Recorded alerts</h2>
                     <Badge text="External delivery disabled" />
                   </div>
                   <p className="muted">
-                    Repeated alerts are grouped by record. No external messages
-                    are sent.
+                    Repeated alerts are grouped by record. No messages are sent
+                    externally.
                   </p>
-                  {!alerts.length ? (
+                  {!data.hasRecords ? (
                     <div className="empty-state">
                       <Bell />
-                      <strong>No open alerts</strong>
+                      <strong>Monitoring has no records yet</strong>
+                      <p>
+                        Import reports or confirm register entries to evaluate
+                        alerts.
+                      </p>
                     </div>
+                  ) : !alerts.length ? (
+                    <p>
+                      No recorded alerts. Checks run after imports and confirmed
+                      changes.
+                    </p>
                   ) : (
                     alerts.map((a) => (
                       <button
-                        className="outcome-row"
                         key={a.id}
+                        className="alert-record"
                         onClick={() =>
-                          setView(
-                            a.kind === 'correction'
-                              ? 'Register uploads'
-                              : a.kind === 'sync' && admin
-                                ? 'Settings'
-                                : 'Permission review',
-                          )
+                          a.kind === 'sync'
+                            ? nav.setView('Settings')
+                            : nav.open(
+                                a.kind === 'correction' ? 'row' : 'trip',
+                                a.entityId,
+                              )
                         }
                       >
-                        <span>{a.message}</span>
-                        <span>
-                          {date(a.updatedAt)} <ChevronRight size={15} />
-                        </span>
+                        <div>
+                          <Badge text={a.state} />
+                          <strong>{a.message}</strong>
+                          <small>
+                            {a.kind} · First seen {date(a.createdAt)} · Last
+                            evaluated {date(a.updatedAt)}
+                          </small>
+                        </div>
+                        <ArrowUpRight size={16} />
                       </button>
                     ))
                   )}
                 </section>
               )}
-              {view === 'Settings' && admin && (
-                <SettingsPanel
-                  busy={busy}
-                  run={run}
-                  sync={sync}
-                  fresh={fresh}
-                />
-              )}
+              {view === 'Settings' &&
+                (admin ? (
+                  <SettingsPanel
+                    busy={busy}
+                    run={run}
+                    sync={sync}
+                    fresh={fresh}
+                  />
+                ) : (
+                  <section className="panel">
+                    <h2>Administrator access required</h2>
+                    <p>Your role does not allow connection or staff changes.</p>
+                  </section>
+                ))}
               <footer className="page-footer">
-                <span>Evidence-based fleet records · {data.ruleVersion}</span>
-                <span>Last successful sync: {date(fresh.lastSuccess)} IST</span>
+                <span>Recorded evidence · Rule {data.ruleVersion}</span>
+                <span>
+                  {fresh.lastSuccess
+                    ? 'Last successful sync: ' +
+                      date(fresh.lastSuccess) +
+                      ' IST'
+                    : 'No successful sync yet'}
+                </span>
               </footer>
             </>
           )}
         </div>
       </main>
-      {rowId && data && (
-        <RegisterReview
-          row={data.rows.find((r: any) => r.id === rowId)}
-          documents={data.documents}
+      {data && nav.detail && nav.id && (
+        <RecordDetail
+          nav={nav}
           canEdit={canUpload}
-          busy={busy}
-          close={() => setRowId(null)}
-          refresh={load}
-        />
-      )}{' '}
-      {tripId && data && (
-        <PermissionReview
-          trip={rows.find((t: Trip) => t.id === tripId)}
-          data={data}
           canReview={canReview}
-          close={() => setTripId(null)}
           refresh={load}
         />
       )}

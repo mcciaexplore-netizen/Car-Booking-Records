@@ -21,6 +21,8 @@ The identity headers are trusted **only behind the Sites dispatcher**. Do not ex
 
 ## Read-only Zoho OAuth setup
 
+For the one-time Self Client exchange, use the [secure Python setup utility](ZOHO-TOKEN-SETUP.md). It accepts credentials privately, checks the regional response, and saves an encrypted Windows provisioning bundle without printing tokens. The bundle still needs installation into hosting secrets; it does not connect or deploy the dashboard by itself.
+
 1. Obtain the actual Creator app URL, owner link name, app link name, account data centre, plan, purchased users, and the account's remaining API allowance. Confirm that the consenting account can read the complete relevant reports and history.
 2. Register a server-based OAuth client in the account's regional Zoho API console. Use Zoho's authorization-code flow (or its Self Client flow for an internal single-account integration) to obtain a refresh token. Exchange codes only in a secure server/admin environment. Never put tokens in a browser URL, browser code, Git, logs, screenshots or this dashboard's JSON settings.
 3. Request only `ZohoCreator.report.READ`, `ZohoCreator.meta.application.READ` and `ZohoCreator.meta.form.READ`. No booking, approval, form-create, record-update or record-delete scopes are used. Do not add write-back scopes without explicit authorization.
@@ -35,7 +37,7 @@ The identity headers are trusted **only behind the Sites dispatcher**. Do not ex
 | `ZOHO_OWNER` | No | Actual owner link name |
 | `ZOHO_APP` | No | Actual application link name |
 
-Access tokens are refreshed on the server and retained only for the request. OAuth responses are never logged. The returned `api_domain` is checked against the configured regional allowlist. Refresh tokens stay in hosting secrets and are never saved to the application database.
+Access tokens are renewed automatically on demand and reused in server memory until one minute before expiry, separately in each Worker isolate. OAuth responses are never logged. The returned `api_domain` is checked against the configured regional allowlist. Refresh tokens stay in hosting secrets and are never saved to the application database. For local Windows use, `npm.cmd run dev:zoho` injects the encrypted bundle into the development server process; Settings → Check Zoho access verifies renewal independently of the application/report setup.
 
 5. In Settings, edit `syncConfig`. Keep `mappings: []`, set `dailyApiBudget` from verified available account allowance, select an interval of at least 15 minutes, and set `allowanceVerified: true`. Fleet Desk's local daily counter resets at UTC midnight; leave room for other Creator integrations and the account's own reset window. The Zoho limit is still authoritative.
 6. Select **Discover reports**, then **Inspect fields** for each actual form from the metadata. Only after reading that evidence, create the mappings described in DATA-MODEL.md. Reports that do not exist stay unmapped. Inspect a representative real source record to verify nested lookups, timestamp formats, approval events and passenger semantics.
@@ -87,3 +89,22 @@ Alerts are an internal deduplicated attention queue. Categories can be enabled o
 Original documents are retained until an administrator agrees a retention policy. Set `retention.originalDays` (minimum 30, or null). An administrator can POST a documented reason to `/api/fleet/purge/{documentId}` for an expired, fully reviewed upload. This removes private original/extraction objects, retains the SHA-256 tombstone and audit evidence, and cannot delete a document with unconfirmed rows. Purge is manual, not scheduled. Retention exceptions/legal holds and deletion of employee identifiers in historical audit records need a company policy before production use.
 
 D1 and R2 are the durable stores. Back up both with the hosting administrator before migrations or company rollout; a restore drill is still required. Historical snapshots and audit rows intentionally accumulate and must be included in the storage budget. Large histories currently load into server memory for filtering, reconciliation and CSV export; load-test your selected retention range before company rollout. This implementation is intended for the requested small fleet, and no unlimited-record performance claim is made.
+
+## September 18 frontend setup and review workflow
+
+Use **Settings → Connections** for the executable sequence. Credentials are provisioned securely outside the browser. If the Windows token utility reports that a bundle already exists, run `python scripts/zoho_token_exchange.py --check`; it preserves the bundle. Do not delete working credentials or paste a token into dashboard settings. `npm.cmd run dev:zoho` starts local development from the encrypted bundle; hosted secrets are a separate installation.
+
+1. Verify server authorization. Configured credentials, verified access and a completed import have separate indicators.
+2. Save the exact owner/app **link names**. These non-secret values may now be stored in the dashboard. Saved values take precedence over `ZOHO_OWNER`/`ZOHO_APP` runtime defaults. Changing the application clears its discovery/mapping state, preserves the last imported generation and is blocked while a sync is active.
+3. In **Sync & rules**, verify account allowance and configure the conservative interval/budget. This remains an explicit administrative policy step.
+4. Discover actual reports and inspect their actual form fields. Select them in the visual mapping editor, inspect the canonical-to-source preview, then Save and validate. JSON remains an advanced option for inspected nested paths, decision values, criteria and modified-time setup. No optional report is invented.
+5. Import selected report history. Latest import progress shows pages read, records read, current report, durable cursor presence, stored rows by report and the next allowed retry. The source does not supply a reliable total-page percentage. Incremental stored-row counts include retained records and therefore may exceed records read.
+6. Provision and verify the private background trigger separately. Credentials and an observed authenticated trigger are separate milestones; one observation does not prove that a recurring schedule works.
+
+On **Register uploads**, check the extraction notice before selecting files. Every file has its own result and Retry action. A saved original may still be awaiting extraction. Duplicate upload links to the existing document. Use Resume review to compare the authorized original with the selected page/row. Image rotation/zoom do not alter the file; reliable coordinates produce a highlight, otherwise only textual references are shown.
+
+Save correction stores edited draft values while preserving source values and flags. Confirm register entry is a separate action that makes the row available to confirmed trip/purchase reporting. Permission review uses a separate workflow and requires a reason. Browser-memory unsaved drafts survive review tab/list navigation within the active page, but are not durable saved drafts; save corrections before closing the browser. Leaving a dirty review prompts to keep or discard edits.
+
+The permission workspace compares actual and booked fields, shows dated/undated events, and retains reviewer changes. Confirming a candidate link recalculates the rules; it does not manufacture approval. Later approvals and documented exceptions stay distinct from prior permission.
+
+Exports include every authorized filtered record, not just the visible page. Trip dates use departure or explicit register date; fuel uses purchase/register date first. Pending image reviews count documents across the workspace. Vehicle panels use the latest available evidence across dates, independently of report date filters. Internal alerts show their evidence and resolution state; no external delivery is active.

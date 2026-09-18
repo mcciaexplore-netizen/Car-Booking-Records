@@ -23,3 +23,11 @@ Planning formulas:
 Fleet Desk caps each upload at 10 MB, each automatic extraction at 30 configured pages or fewer, and uses a configured monthly page reservation budget. Azure's F0 limits are narrower: 4 MB input and only the first two PDF/TIFF pages. Do not mistake successful partial extraction for completion. Operator confirmation must account for every source page; larger registers can be split into explicit page-range files. [Azure input requirements](https://learn.microsoft.com/en-us/azure/ai-services/document-intelligence/prebuilt/layout?view=doc-intel-4.0.0)
 
 Historical source snapshots and append-only review history grow over time. Final hosting sizing and performance need actual row counts, upload volume, agreed retention and a load test. Authentication/sharing on an alternative host also needs explicit planning; the current Sites identity headers are not safe to trust on an exposed standalone Worker.
+
+## Frontend change cost impact — 18 September 2026
+
+This upgrade introduces **no new paid provider or runtime package** and did not activate document analysis, notifications or a scheduler. The public price references above retain their 8 September verification date; they were not freshly repriced during this frontend task. Account costs and entitlements remain unverified.
+
+Bounded responses and on-demand original/record detail reduce browser payloads, but the server still evaluates the active evidence generation for reconciliation and filtered aggregates. The open, visible dashboard refreshes its local stored-data snapshot about once per minute; extraction status polling is limited to the relevant visible workflow. Those are hosting requests, not automatic Zoho API calls. Additional tabs/users and private thumbnail reads can increase Worker/D1/R2 usage. Retained source generations and review history continue to grow.
+
+Before rollout measure row counts, concurrent users, original/page volume, retention and per-request CPU/database reads, then confirm actual Sites/Zoho/Azure charges and limits. No claim of free operation is made.

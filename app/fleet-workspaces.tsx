@@ -1,678 +1,608 @@
 'use client';
 import { useState, useEffect } from 'react';
-import { FileText, ExternalLink } from 'lucide-react';
+import { ConnectionSetup, MappingEditor, StaffAccess } from './fleet-setup';
+import {
+  ExternalLink,
+  Check,
+  ArrowRight,
+  Link2,
+  RefreshCw,
+  Users,
+  History,
+  SlidersHorizontal,
+  AlertCircle,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
-import {
-  Dialog,
-  DialogContent,
-  DialogTitle,
-  DialogDescription,
-} from '@/components/ui/dialog';
-import { TableRow, TableCell } from '@/components/ui/table';
-import { FIELDS, NUMBERS, TIMES, blank, type Values } from '@/lib/domain';
-import {
-  api,
-  Badge,
-  Picker,
-  DataTable,
-  Field,
-  date,
-  display,
-  localTime,
-} from './fleet-ui';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import { Checkbox } from '@/components/ui/checkbox';
+import type { SyncConfig } from '@/lib/zoho';
 
-export function RegisterReview({
-  row,
-  documents,
-  canEdit,
-  close,
-  refresh,
-}: any) {
-  const [values, setValues] = useState<Values>(row?.corrected ?? blank()),
-    [error, setError] = useState(''),
-    [busy, setBusy] = useState(false),
-    [history, setHistory] = useState<any>(null);
-  useEffect(() => {
-    if (row) {
-      setValues(row.corrected);
-      api('history/' + encodeURIComponent(row.id))
-        .then(setHistory)
-        .catch(() => {});
-    }
-  }, [row?.id]);
-  if (!row) return null;
-  const doc = documents.find((d: any) => d.id === row.documentId);
-  async function save(confirm: boolean) {
-    setBusy(true);
-    setError('');
-    try {
-      await api('row/' + encodeURIComponent(row.id), {
-        version: row.version,
-        values,
-        confirm,
-      });
-      await refresh();
-      close();
-    } catch (e: any) {
-      setError(e.message);
-    } finally {
-      setBusy(false);
-    }
-  }
-  return (
-    <Dialog
-      open
-      onOpenChange={(v) => {
-        if (!v) close();
-      }}
-    >
-      <DialogContent className="review-dialog">
-        <DialogTitle>Review register row</DialogTitle>
-        <DialogDescription>
-          Page {row.page} · row {row.row} · {doc?.name}. Blank fields stay
-          unknown. All date and time inputs use IST.
-        </DialogDescription>
-        <div className="review-workspace">
-          <div className="original-pane">
-            {doc?.mime === 'application/pdf' ? (
-              <iframe
-                title="Original register PDF"
-                src={
-                  '/api/fleet/document/' + row.documentId + '#page=' + row.page
-                }
-              />
-            ) : (
-              <img
-                alt="Original uploaded vehicle register"
-                src={'/api/fleet/document/' + row.documentId}
-              />
-            )}
-            <details>
-              <summary>Original extracted values & locations</summary>
-              <pre className="json-view">
-                {JSON.stringify(row.original, null, 2)}
-              </pre>
-            </details>
-          </div>
-          <div className="extraction-pane">
-            <Badge text={row.state} />
-            {row.flags.map((f: string) => (
-              <p className="flag" key={f}>
-                {f}
-              </p>
-            ))}
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                void save(true);
-              }}
-            >
-              <div className="form-grid">
-                {(Object.keys(FIELDS) as (keyof Values)[]).map((key) => (
-                  <Field
-                    key={key}
-                    label={FIELDS[key] + (TIMES.includes(key) ? ' · IST' : '')}
-                  >
-                    {key === 'signaturePresent' ? (
-                      <Picker
-                        label={FIELDS[key]}
-                        value={
-                          values[key] === null
-                            ? 'unknown'
-                            : values[key]
-                              ? 'yes'
-                              : 'no'
-                        }
-                        onChange={(v) => {
-                          if (canEdit)
-                            setValues({
-                              ...values,
-                              [key]: v === 'unknown' ? null : v === 'yes',
-                            });
-                        }}
-                        options={[
-                          { value: 'unknown', label: 'Unknown' },
-                          {
-                            value: 'yes',
-                            label: 'Present (identity not inferred)',
-                          },
-                          { value: 'no', label: 'Not present' },
-                        ]}
-                      />
-                    ) : (
-                      <Input
-                        disabled={!canEdit}
-                        type={
-                          NUMBERS.includes(key)
-                            ? 'number'
-                            : TIMES.includes(key)
-                              ? 'datetime-local'
-                              : key === 'registerDate'
-                                ? 'date'
-                                : 'text'
-                        }
-                        min={NUMBERS.includes(key) ? 0 : undefined}
-                        step={NUMBERS.includes(key) ? 'any' : undefined}
-                        value={
-                          TIMES.includes(key)
-                            ? localTime(values[key] as string | null)
-                            : values[key] == null
-                              ? ''
-                              : String(values[key])
-                        }
-                        onChange={(e) => {
-                          const raw = e.target.value;
-                          let value: any =
-                            raw === ''
-                              ? null
-                              : NUMBERS.includes(key)
-                                ? Number(raw)
-                                : raw;
-                          if (raw && TIMES.includes(key)) {
-                            const stamp = Date.parse(
-                              raw + (raw.length === 16 ? ':00' : '') + '+05:30',
-                            );
-                            value = Number.isFinite(stamp)
-                              ? new Date(stamp).toISOString()
-                              : null;
-                          }
-                          setValues({ ...values, [key]: value });
-                        }}
-                      />
-                    )}
-                  </Field>
-                ))}
-              </div>
-              {error && (
-                <p role="alert" className="form-error">
-                  {error}
-                </p>
-              )}
-              {canEdit && (
-                <div className="form-actions">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    disabled={busy}
-                    onClick={() => void save(false)}
-                  >
-                    Save correction
-                  </Button>
-                  <Button disabled={busy}>Confirm register entry</Button>
-                </div>
-              )}
-            </form>
-          </div>
-        </div>
-        <details>
-          <summary>
-            Correction history ({history?.changes?.length ?? 0})
-          </summary>
-          <pre className="json-view">
-            {JSON.stringify(history?.changes ?? [], null, 2)}
-          </pre>
-        </details>
-      </DialogContent>
-    </Dialog>
-  );
-}
-export function PermissionReview({
-  trip,
-  data,
-  canReview,
-  close,
-  refresh,
-}: any) {
-  const [choice, setChoice] = useState(trip?.bookingId ?? ''),
-    [decision, setDecision] = useState('unresolved'),
-    [error, setError] = useState(''),
-    [busy, setBusy] = useState(false),
-    [history, setHistory] = useState<any>(null);
-  useEffect(() => {
-    if (trip)
-      api('history/' + encodeURIComponent(trip.id))
-        .then(setHistory)
-        .catch(() => {});
-  }, [trip?.id]);
-  if (!trip) return null;
-  const b = data.bookings.find((b: any) => b.id === choice);
-  return (
-    <Dialog
-      open
-      onOpenChange={(v) => {
-        if (!v) close();
-      }}
-    >
-      <DialogContent className="review-dialog">
-        <DialogTitle>Permission evidence</DialogTitle>
-        <DialogDescription>
-          Trip state and permission are separate. Decisions preserve the
-          original classification.
-        </DialogDescription>
-        <div className="review-workspace">
-          <div className="original-pane">
-            {trip.documentId ? (
-              <iframe
-                title="Original trip register"
-                src={
-                  '/api/fleet/document/' +
-                  trip.documentId +
-                  '#page=' +
-                  (trip.page ?? 1)
-                }
-              />
-            ) : (
-              <div className="source-evidence">
-                <FileText size={32} />
-                <h3>Zoho source record</h3>
-                <p>{trip.id}</p>
-                <p className="muted">
-                  This source trip has no linked uploaded image.
-                </p>
-              </div>
-            )}
-            <dl className="setup-list">
-              <dt>Trip ID</dt>
-              <dd>{trip.id}</dd>
-              <dt>Employee</dt>
-              <dd>{display(trip.employee)}</dd>
-              <dt>Driver</dt>
-              <dd>{display(trip.driver)}</dd>
-              <dt>Vehicle</dt>
-              <dd>{display(trip.vehicleId)}</dd>
-              <dt>Departure · IST</dt>
-              <dd>{date(trip.departure)}</dd>
-              <dt>Booking reference</dt>
-              <dd>{display(trip.bookingRef)}</dd>
-              <dt>Trip state</dt>
-              <dd>{trip.tripStatus}</dd>
-              <dt>Original classification</dt>
-              <dd>{trip.originalPermission}</dd>
-            </dl>
-          </div>
-          <div className="extraction-pane">
-            <Badge text={trip.permission} />
-            <h3 className="mt-5">Matching differences</h3>
-            {trip.differences.length ? (
-              trip.differences.map((d: string) => (
-                <p className="flag" key={d}>
-                  {d}
-                </p>
-              ))
-            ) : (
-              <p className="muted">
-                Required evidence matches a prior approval.
-              </p>
-            )}
-            <Field label="Candidate Zoho booking">
-              <Picker
-                label="Candidate booking"
-                value={choice}
-                onChange={setChoice}
-                options={[
-                  { value: '', label: 'Choose a booking' },
-                  ...data.bookings.map((b: any) => ({
-                    value: b.id,
-                    label: `${trip.candidateIds?.includes(b.id) ? 'Suggested · ' : ''}${b.bookingRef ?? b.sourceId} · ${b.employee ?? 'Unknown'} · ${date(b.departure)}`,
-                  })),
-                ]}
-              />
-            </Field>
-            {b && (
-              <div className="booking-evidence">
-                <h3>Candidate details</h3>
-                <p>
-                  {display(b.vehicleId)} · {display(b.employee)} ·{' '}
-                  {display(b.driver)}
-                </p>
-                <p>
-                  {date(b.departure)} → {date(b.expectedReturn)}
-                </p>
-                <p>
-                  {display(b.destination)} · {display(b.passengers)} passengers
-                </p>
-                <h3>Approval history</h3>
-                {data.approvals
-                  .filter((a: any) =>
-                    [b.id, b.bookingRef, b.sourceId].includes(a.bookingRef),
-                  )
-                  .map((a: any) => (
-                    <p key={a.id}>
-                      {a.decision ?? 'Unknown decision'} · {date(a.decidedAt)} ·{' '}
-                      {display(a.approver)}
-                    </p>
-                  ))}
-              </div>
-            )}
-            {canReview && (
-              <form
-                onSubmit={async (e) => {
-                  e.preventDefault();
-                  const f = new FormData(e.currentTarget);
-                  setBusy(true);
-                  setError('');
-                  try {
-                    await api('review', {
-                      tripId: trip.id,
-                      evidenceHash: trip.evidenceHash,
-                      action: decision,
-                      bookingId: choice || null,
-                      duplicateOf: f.get('duplicateOf') || null,
-                      reason: f.get('reason'),
-                    });
-                    await refresh();
-                    close();
-                  } catch (e: any) {
-                    setError(e.message);
-                  } finally {
-                    setBusy(false);
-                  }
-                }}
-              >
-                <Field label="Review decision">
-                  <Picker
-                    label="Review decision"
-                    value={decision}
-                    onChange={setDecision}
-                    options={[
-                      { value: 'unresolved', label: 'Leave unresolved' },
-                      {
-                        value: 'match',
-                        label: 'Confirm candidate booking link',
-                      },
-                      {
-                        value: 'unauthorized',
-                        label: 'Confirm unauthorized after review',
-                      },
-                      {
-                        value: 'exception',
-                        label: 'Accept a documented exception',
-                      },
-                      {
-                        value: 'duplicate',
-                        label: 'Same trip as another record',
-                      },
-                    ]}
-                  />
-                </Field>
-                {decision === 'duplicate' && (
-                  <Field label="Canonical trip">
-                    <select
-                      name="duplicateOf"
-                      className="native-select"
-                      required
-                    >
-                      <option value="">Choose another trip</option>
-                      {data.trips
-                        .filter((t: any) => t.id !== trip.id)
-                        .map((t: any) => (
-                          <option value={t.id} key={t.id}>
-                            {t.id} · {t.employee} · {date(t.departure)}
-                          </option>
-                        ))}
-                    </select>
-                  </Field>
-                )}
-                <Field label="Reason and supporting evidence (required)">
-                  <Textarea name="reason" required minLength={5} rows={4} />
-                </Field>
-                <p className="muted">
-                  Later approval and accepted exceptions never count as prior
-                  approval. A candidate link still has to pass the matching
-                  rules.
-                </p>
-                {error && (
-                  <p role="alert" className="form-error">
-                    {error}
-                  </p>
-                )}
-                <Button disabled={busy}>Save review decision</Button>
-              </form>
-            )}
-          </div>
-        </div>
-        <details>
-          <summary>Decision and evidence history</summary>
-          <pre className="json-view">
-            {JSON.stringify(history ?? {}, null, 2)}
-          </pre>
-        </details>
-      </DialogContent>
-    </Dialog>
-  );
-}
+import { TableRow, TableCell } from '@/components/ui/table';
+
+import { api, Picker, DataTable, Field, date } from './fleet-ui';
+
 export function SettingsPanel({ busy, run, sync, fresh }: any) {
   const [settings, setSettings] = useState<any>(null),
+    [settingsTab, setSettingsTab] = useState('connections'),
+    [loadError, setLoadError] = useState(''),
+    [syncDraft, setSyncDraft] = useState<SyncConfig | null>(null),
     [key, setKey] = useState('syncConfig'),
     [draft, setDraft] = useState('');
   useEffect(() => {
-    api('settings').then((s) => {
-      setSettings(s);
-      setDraft(JSON.stringify(s[key], null, 2));
-    });
+    let cancelled = false;
+    api('settings')
+      .then((s) => {
+        if (cancelled) return;
+        setSettings(s);
+        setSyncDraft(s.syncConfig);
+        setDraft(JSON.stringify(s[key], null, 2));
+        setLoadError('');
+      })
+      .catch((error) => {
+        if (!cancelled) setLoadError(error.message);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [key]);
-  if (!settings)
+  if (loadError)
+    return (
+      <div className="error-banner" role="alert">
+        <AlertCircle size={18} />
+        <span>{loadError}</span>
+        <Button
+          variant="outline"
+          onClick={() => {
+            setLoadError('');
+            api('settings')
+              .then((s) => {
+                setSettings(s);
+                setSyncDraft(s.syncConfig);
+                setDraft(JSON.stringify(s[key], null, 2));
+              })
+              .catch((error) => setLoadError(error.message));
+          }}
+        >
+          Try again
+        </Button>
+      </div>
+    );
+  if (!settings || !syncDraft)
     return <div className="panel">Loading connection settings…</div>;
   const save = () =>
     run(async () => {
       await api('settings', { key, value: JSON.parse(draft) });
-      setSettings(await api('settings'));
+      const latest = await api('settings');
+      setSettings(latest);
+      setSyncDraft(latest.syncConfig);
+      setDraft(JSON.stringify(latest[key], null, 2));
     }, 'Configuration saved.');
+  const canDiscover =
+    settings.configured.zoho &&
+    settings.syncConfig.allowanceVerified &&
+    settings.syncConfig.dailyApiBudget > 0;
+  const canImport = canDiscover && settings.syncConfig.mappings.length > 0;
+  const steps = [
+    {
+      title: 'Server credentials',
+      description: 'Stored privately',
+      done: settings.configured.oauth?.configured,
+    },
+    {
+      title: 'Verify access',
+      description: 'Read-only authorization',
+      done: settings.configured.oauth?.verified,
+    },
+    {
+      title: 'Select application',
+      description: 'Exact Creator link names',
+      done: !!settings.application?.owner && !!settings.application?.app,
+    },
+    {
+      title: 'Verify allowance',
+      description: 'Account API budget',
+      done: settings.syncConfig.allowanceVerified,
+    },
+    {
+      title: 'Map reports',
+      description: 'Inspected source fields',
+      done: settings.syncConfig.mappings.length > 0,
+    },
+    {
+      title: 'Import history',
+      description: 'All selected pages',
+      done: !!fresh.lastSuccess,
+    },
+    {
+      title: 'Configure scheduler',
+      description: 'Private trigger credentials',
+      done: settings.configured.schedulerSecret,
+    },
+    {
+      title: 'Observe trigger',
+      description: 'Authenticated call recorded',
+      done: !!settings.schedulerLastSeen,
+    },
+  ];
+  const currentStep = steps.findIndex((step) => !step.done);
   return (
-    <>
-      <div className="settings-grid">
-        <section className="panel">
-          <h2>Zoho Creator · read-only</h2>
-          <p className="muted">
-            Verify the account allowance and save an API budget first. Discover
-            reports and fields before creating mappings. Do not enter
-            credentials into these forms.
-          </p>
-          <dl className="setup-list">
-            <dt>Server OAuth secrets</dt>
-            <dd>
-              {settings.configured.zoho ? 'Configured' : 'Not configured'}
-            </dd>
-            <dt>Report mappings</dt>
-            <dd>{settings.syncConfig.mappings.length} mappings</dd>
-            <dt>Last successful import</dt>
-            <dd>{date(fresh.lastSuccess)}</dd>
-            <dt>Scheduled trigger secret</dt>
-            <dd>
-              {settings.configured.schedulerSecret
-                ? 'Configured; verify external trigger'
-                : 'Not configured'}
-            </dd>
-          </dl>
-          <div className="review-actions">
-            <Button
-              disabled={busy || !settings.configured.zoho}
-              onClick={() =>
-                run(async () => {
-                  await api('discover', {});
-                  setSettings(await api('settings'));
-                }, 'Actual report and form metadata saved.')
-              }
-            >
-              Discover reports
-            </Button>
-            <Button
-              variant="outline"
-              disabled={busy || !settings.configured.zoho}
-              onClick={sync}
-            >
-              Import history
-            </Button>
+    <Tabs
+      className="workspace-settings"
+      value={settingsTab}
+      onValueChange={(value) => setSettingsTab(String(value))}
+    >
+      <TabsList
+        variant="line"
+        aria-label="Settings sections"
+        className="settings-tabs"
+      >
+        <TabsTrigger value="connections">
+          <Link2 />
+          Connections
+        </TabsTrigger>
+        <TabsTrigger value="sync">
+          <SlidersHorizontal />
+          Sync & rules
+        </TabsTrigger>
+        <TabsTrigger value="staff">
+          <Users />
+          Staff access
+        </TabsTrigger>
+        <TabsTrigger value="activity">
+          <History />
+          Activity
+        </TabsTrigger>
+      </TabsList>
+      <TabsContent keepMounted value="connections">
+        <section
+          className="connection-journey"
+          aria-label="Zoho connection progress"
+        >
+          <div className="section-heading">
+            <div>
+              <h2>Connect your fleet, step by step</h2>
+              <p className="muted">
+                Your records stay private. Zoho access is read-only.
+              </p>
+            </div>
+            <span className="journey-progress">
+              {steps.filter((step) => step.done).length} of {steps.length}{' '}
+              complete
+            </span>
+          </div>
+          <ol>
+            {steps.map((step, index) => (
+              <li
+                key={step.title}
+                className={
+                  step.done
+                    ? 'step-complete'
+                    : index === currentStep
+                      ? 'step-current'
+                      : ''
+                }
+              >
+                <span className="step-number">
+                  {step.done ? (
+                    <Check size={17} />
+                  ) : (
+                    String(index + 1).padStart(2, '0')
+                  )}
+                </span>
+                <div>
+                  <strong>{step.title}</strong>
+                  <p>{step.description}</p>
+                </div>
+              </li>
+            ))}
+          </ol>
+        </section>
+        <ConnectionSetup
+          settings={settings}
+          refresh={async () => {
+            const latest = await api('settings');
+            setSettings(latest);
+            setSyncDraft(latest.syncConfig);
+          }}
+          run={run}
+          busy={busy}
+          sync={sync}
+        >
+          <MappingEditor
+            settings={settings}
+            refresh={async () => {
+              const latest = await api('settings');
+              setSettings(latest);
+              setSyncDraft(latest.syncConfig);
+            }}
+            run={run}
+            busy={busy}
+          />
+        </ConnectionSetup>
+        <details className="advanced-settings">
+          <summary>Connection diagnostics and extraction policies</summary>
+          <div className="settings-grid">
+            <section className="panel">
+              <div className="integration-heading">
+                <span className="integration-symbol">
+                  <Link2 size={24} />
+                </span>
+                <div>
+                  <h2>Zoho Creator</h2>
+                  <p className="muted">Vehicle records & approvals</p>
+                </div>
+                <span
+                  className={
+                    'badge ' + (settings.configured.zoho ? 'green' : 'neutral')
+                  }
+                >
+                  {settings.configured.zoho
+                    ? 'Configured'
+                    : 'Setup in progress'}
+                </span>
+              </div>
+              <p className="muted">
+                Verify access, then discover the reports you want to import.
+              </p>
+              <dl className="setup-list">
+                <dt>Zoho authorization</dt>
+                <dd>
+                  {settings.configured.oauth?.configured
+                    ? 'Configured'
+                    : 'Not configured'}
+                </dd>
+                <dt>Automatic access renewal</dt>
+                <dd>
+                  {settings.configured.oauth?.verified
+                    ? 'Verified · renews when needed'
+                    : settings.configured.oauth?.configured
+                      ? 'Ready to verify'
+                      : 'Awaiting credentials'}
+                </dd>
+                <dt>Creator application</dt>
+                <dd>
+                  {settings.configured.zoho
+                    ? 'Configured'
+                    : 'Application URL needed'}
+                </dd>
+                <dt>Report mappings</dt>
+                <dd>{settings.syncConfig.mappings.length} mappings</dd>
+                <dt>Last successful import</dt>
+                <dd>{date(fresh.lastSuccess)}</dd>
+                <dt>Scheduled trigger secret</dt>
+                <dd>
+                  {settings.configured.schedulerSecret
+                    ? 'Configured; verify external trigger'
+                    : 'Not configured'}
+                </dd>
+              </dl>
+              <div className="review-actions">
+                <Button
+                  variant="outline"
+                  disabled={busy || !settings.configured.oauth?.configured}
+                  onClick={() =>
+                    run(async () => {
+                      await api('connection-test', {});
+                      setSettings(await api('settings'));
+                    }, 'Zoho access verified. Access tokens renew automatically when needed.')
+                  }
+                >
+                  Check Zoho access
+                </Button>
+                <Button
+                  disabled={busy || !canDiscover}
+                  onClick={() =>
+                    run(async () => {
+                      await api('discover', {});
+                      setSettings(await api('settings'));
+                    }, 'Actual report and form metadata saved.')
+                  }
+                >
+                  Discover reports
+                </Button>
+                <Button
+                  variant="outline"
+                  disabled={busy || !canImport}
+                  onClick={sync}
+                >
+                  Import history
+                </Button>
+              </div>
+              {!canDiscover && (
+                <p className="action-hint">
+                  {!settings.configured.zoho
+                    ? 'Select your Creator application before discovering reports.'
+                    : 'Set a verified API allowance in Sync & rules to continue.'}
+                </p>
+              )}
+              <details className="advanced-disclosure">
+                <summary>Report fields & discovered metadata</summary>
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    const f = new FormData(e.currentTarget);
+                    run(async () => {
+                      await api('fields', { form: f.get('form') });
+                      setSettings(await api('settings'));
+                    }, 'Form fields inspected.');
+                  }}
+                  className="inline-form"
+                >
+                  <Field label="Form link name from discovered metadata">
+                    <Input name="form" required />
+                  </Field>
+                  <Button
+                    variant="outline"
+                    disabled={busy || !settings.metadata}
+                  >
+                    Inspect fields
+                  </Button>
+                </form>
+                <details>
+                  <summary>Discovered metadata</summary>
+                  <pre className="json-view">
+                    {JSON.stringify(
+                      settings.metadata ?? {
+                        status: 'Not inspected. No names assumed.',
+                      },
+                      null,
+                      2,
+                    )}
+                  </pre>
+                </details>
+              </details>
+            </section>
+            <div className="settings-aside">
+              <section className="setup-help panel">
+                <span className="welcome-kicker">YOUR NEXT STEP</span>
+                <h2>
+                  {!settings.configured.zoho
+                    ? 'Find your application link'
+                    : !canImport
+                      ? 'Prepare your reports'
+                      : fresh.lastSuccess
+                        ? 'Keep your records up to date'
+                        : 'Start your first import'}
+                </h2>
+                {!settings.configured.zoho ? (
+                  <>
+                    <p className="muted">
+                      Open the application in Zoho Creator that contains MCCIA’s
+                      vehicle records.
+                    </p>
+                    <ol>
+                      <li>Open Zoho Creator and choose your application.</li>
+                      <li>
+                        Click <b>Access this application</b> if you are in the
+                        editor.
+                      </li>
+                      <li>
+                        Copy the address from your browser and share it with
+                        your administrator.
+                      </li>
+                    </ol>
+                    <p className="url-example">
+                      creatorapp.zoho.in/<b>organisation</b>/<b>application</b>
+                    </p>
+                    <p className="muted">
+                      The application link identifies your records. Keep
+                      passwords and API keys out of these forms.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <p className="muted">
+                      Set the available API allowance, discover your reports,
+                      then match their fields before importing.
+                    </p>
+                    <Button
+                      variant="outline"
+                      onClick={() => setSettingsTab('sync')}
+                    >
+                      Open sync settings <ArrowRight size={15} />
+                    </Button>
+                  </>
+                )}
+              </section>
+              <details className="panel processing-panel">
+                <summary>Document processing & retention</summary>
+                <h2>Extraction & data handling</h2>
+                <p className="muted">
+                  Azure Document Intelligence Layout receives uploaded pages and
+                  returns text, tables, confidence and source coordinates.
+                  Signature identity is never inferred.
+                </p>
+                <p className="muted">
+                  Regional per-page charges need confirmation. Set the monthly
+                  page budget, endpoint and server key before enabling. Pages
+                  beyond the configured range need a separate upload.
+                </p>
+                <dl className="setup-list">
+                  <dt>Automatic extraction</dt>
+                  <dd>
+                    {settings.configured.extraction ? 'Configured' : 'Disabled'}
+                  </dd>
+                  <dt>Original retention</dt>
+                  <dd>
+                    {settings.retention.originalDays
+                      ? settings.retention.originalDays +
+                        ' days; administrator purge'
+                      : 'Retain until a policy is agreed'}
+                  </dd>
+                  <dt>External notifications</dt>
+                  <dd>Disabled · authorization required</dd>
+                </dl>
+                <a
+                  className="text-link"
+                  href="https://azure.microsoft.com/en-us/pricing/details/document-intelligence/"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Azure pricing <ExternalLink size={14} />
+                </a>
+              </details>
+            </div>
+          </div>
+        </details>
+      </TabsContent>
+      <TabsContent keepMounted value="sync">
+        <section className="panel sync-preferences">
+          <div className="section-heading">
+            <div>
+              <h2>Sync preferences</h2>
+              <p className="muted">
+                Use the allowance available in your Zoho account.
+              </p>
+            </div>
+            <RefreshCw size={20} />
           </div>
           <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              const f = new FormData(e.currentTarget);
+            onSubmit={(event) => {
+              event.preventDefault();
               run(async () => {
-                await api('fields', { form: f.get('form') });
-                setSettings(await api('settings'));
-              }, 'Form fields inspected.');
+                await api('settings', { key: 'syncConfig', value: syncDraft });
+                const latest = await api('settings');
+                setSettings(latest);
+                setSyncDraft(latest.syncConfig);
+                if (key === 'syncConfig')
+                  setDraft(JSON.stringify(latest.syncConfig, null, 2));
+              }, 'Sync preferences saved.');
             }}
-            className="inline-form"
           >
-            <Field label="Form link name from discovered metadata">
-              <Input name="form" required />
-            </Field>
-            <Button variant="outline" disabled={busy}>
-              Inspect fields
-            </Button>
+            <div className="form-grid">
+              <Field label="Daily API request budget">
+                <Input
+                  type="number"
+                  min="1"
+                  max="100000"
+                  required
+                  value={syncDraft?.dailyApiBudget || ''}
+                  placeholder="Enter your verified allowance"
+                  onChange={(event) =>
+                    setSyncDraft({
+                      ...syncDraft,
+                      dailyApiBudget: Number(event.target.value),
+                    })
+                  }
+                />
+              </Field>
+              <Field label="Minimum sync interval (minutes)">
+                <Input
+                  type="number"
+                  min="15"
+                  required
+                  value={syncDraft?.intervalMinutes ?? 60}
+                  onChange={(event) =>
+                    setSyncDraft({
+                      ...syncDraft,
+                      intervalMinutes: Number(event.target.value),
+                    })
+                  }
+                />
+              </Field>
+            </div>
+            <label
+              className="allowance-check"
+              htmlFor="verified-zoho-allowance"
+            >
+              <Checkbox
+                id="verified-zoho-allowance"
+                checked={syncDraft?.allowanceVerified ?? false}
+                onCheckedChange={(checked) =>
+                  setSyncDraft({ ...syncDraft, allowanceVerified: checked })
+                }
+              />
+              <span>I have checked the available API allowance in Zoho.</span>
+            </label>
+            <p className="action-hint">
+              The interval applies when a scheduler is connected. You can also
+              sync manually.
+            </p>
+            <Button disabled={busy}>Save sync preferences</Button>
           </form>
-          <details>
-            <summary>Discovered metadata</summary>
-            <pre className="json-view">
-              {JSON.stringify(
-                settings.metadata ?? {
-                  status: 'Not inspected. No names assumed.',
-                },
-                null,
-                2,
-              )}
-            </pre>
-          </details>
         </section>
-        <section className="panel">
-          <h2>Extraction & data handling</h2>
-          <p className="muted">
-            Azure Document Intelligence Layout receives uploaded pages and
-            returns text, tables, confidence and source coordinates. Signature
-            identity is never inferred.
-          </p>
-          <p className="muted">
-            Regional per-page charges need confirmation. Set the monthly page
-            budget, endpoint and server key before enabling. Pages beyond the
-            configured range need a separate upload.
-          </p>
-          <dl className="setup-list">
-            <dt>Automatic extraction</dt>
-            <dd>
-              {settings.configured.extraction ? 'Configured' : 'Disabled'}
-            </dd>
-            <dt>Original retention</dt>
-            <dd>
-              {settings.retention.originalDays
-                ? settings.retention.originalDays + ' days; administrator purge'
-                : 'Retain until a policy is agreed'}
-            </dd>
-            <dt>External notifications</dt>
-            <dd>Disabled · authorization required</dd>
-          </dl>
-          <a
-            className="text-link"
-            href="https://azure.microsoft.com/en-us/pricing/details/document-intelligence/"
-            target="_blank"
-            rel="noreferrer"
+        <details className="advanced-settings">
+          <summary>
+            Advanced field mappings & policies
+            <span>For your workspace administrator</span>
+          </summary>
+          <section className="panel configuration">
+            <h2>Field mappings & policies</h2>
+            <p className="muted">
+              Explicit field mappings and policies. OAuth credentials and
+              refresh tokens belong in server secrets.
+            </p>
+            <Picker
+              value={key}
+              onChange={setKey}
+              label="Configuration category"
+              options={[
+                'syncConfig',
+                'rules',
+                'registerColumns',
+                'extractionBudget',
+                'retention',
+                'notificationRules',
+              ].map((v) => ({
+                value: v,
+                label: (
+                  {
+                    syncConfig: 'Report field mappings',
+                    rules: 'Permission rules',
+                    registerColumns: 'Register columns',
+                    extractionBudget: 'Document processing budget',
+                    retention: 'Record retention',
+                    notificationRules: 'Alert rules',
+                  } as Record<string, string>
+                )[v],
+              }))}
+            />
+            <Textarea
+              aria-label="Configuration JSON"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              rows={13}
+              className="json-editor"
+            />
+            <Button disabled={busy} onClick={save}>
+              Save configuration
+            </Button>
+          </section>
+        </details>
+      </TabsContent>
+      <TabsContent keepMounted value="staff">
+        <StaffAccess
+          settings={settings}
+          refresh={async () => setSettings(await api('settings'))}
+          run={run}
+          busy={busy}
+        />
+      </TabsContent>
+      <TabsContent keepMounted value="activity">
+        <section className="panel configuration">
+          <h2>Synchronization history</h2>
+          <DataTable
+            headers={['Started', 'State', 'Mode', 'Pages / records', 'Details']}
+            empty={!settings.runs.length}
+            emptyTitle="No sync activity yet"
+            emptyDescription="Your import history will appear here after the first sync."
           >
-            Azure pricing <ExternalLink size={14} />
-          </a>
+            {settings.runs.map((r: any) => (
+              <TableRow key={r.id}>
+                <TableCell>{date(r.startedAt)}</TableCell>
+                <TableCell>{r.status}</TableCell>
+                <TableCell>{r.mode}</TableCell>
+                <TableCell>
+                  {r.pages} / {r.count}
+                </TableCell>
+                <TableCell>{r.error ?? '—'}</TableCell>
+              </TableRow>
+            ))}
+          </DataTable>
         </section>
-      </div>
-      <section className="panel configuration">
-        <h2>Configuration</h2>
-        <p className="muted">
-          Explicit field mappings and policies. OAuth credentials and refresh
-          tokens belong in server secrets.
-        </p>
-        <Picker
-          value={key}
-          onChange={setKey}
-          label="Configuration category"
-          options={[
-            'syncConfig',
-            'rules',
-            'registerColumns',
-            'extractionBudget',
-            'retention',
-            'notificationRules',
-          ].map((v) => ({ value: v, label: v }))}
-        />
-        <Textarea
-          aria-label="Configuration JSON"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          rows={13}
-          className="json-editor"
-        />
-        <Button disabled={busy} onClick={save}>
-          Save configuration
-        </Button>
-      </section>
-      <section className="panel configuration">
-        <h2>Staff access</h2>
-        <p className="muted">
-          Role grants apply to reports, attachments and exports. Staff also need
-          access through the private site’s sharing controls.
-        </p>
-        <DataTable
-          headers={['Email', 'Role', 'Access']}
-          empty={!settings.users.length}
-        >
-          {settings.users.map((u: any) => (
-            <TableRow key={u.id}>
-              <TableCell>{u.email}</TableCell>
-              <TableCell>{u.role}</TableCell>
-              <TableCell>{u.active ? 'Active' : 'Disabled'}</TableCell>
-            </TableRow>
-          ))}
-        </DataTable>
-        <form
-          className="inline-form"
-          onSubmit={(e) => {
-            e.preventDefault();
-            const f = new FormData(e.currentTarget);
-            run(async () => {
-              await api('users', {
-                email: f.get('email'),
-                role: f.get('role'),
-                active: f.get('active') === 'on',
-              });
-              setSettings(await api('settings'));
-            }, 'Staff access updated.');
-          }}
-        >
-          <Field label="Staff email">
-            <Input type="email" name="email" required />
-          </Field>
-          <Field label="Role">
-            <select name="role" className="native-select">
-              {['Viewer', 'Register operator', 'Manager', 'Administrator'].map(
-                (r) => (
-                  <option key={r}>{r}</option>
-                ),
-              )}
-            </select>
-          </Field>
-          <label className="check-label">
-            <input type="checkbox" name="active" defaultChecked /> Active
-          </label>
-          <Button disabled={busy}>Save access</Button>
-        </form>
-      </section>
-      <section className="panel configuration">
-        <h2>Synchronization history</h2>
-        <DataTable
-          headers={['Started', 'State', 'Mode', 'Pages / records', 'Details']}
-          empty={!settings.runs.length}
-        >
-          {settings.runs.map((r: any) => (
-            <TableRow key={r.id}>
-              <TableCell>{date(r.startedAt)}</TableCell>
-              <TableCell>{r.status}</TableCell>
-              <TableCell>{r.mode}</TableCell>
-              <TableCell>
-                {r.pages} / {r.count}
-              </TableCell>
-              <TableCell>{r.error ?? '—'}</TableCell>
-            </TableRow>
-          ))}
-        </DataTable>
-      </section>
-    </>
+      </TabsContent>
+    </Tabs>
   );
 }

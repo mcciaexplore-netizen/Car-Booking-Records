@@ -37,6 +37,10 @@ next-env.d.ts
 /outputs/
 /work/
 /.dev.vars
+/.secrets/
+*.dpapi
+__pycache__/
+*.py[cod]
 *.tar.gz
 *.tsbuildinfo
 work-audit*.json

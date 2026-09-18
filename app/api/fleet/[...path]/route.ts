@@ -19,6 +19,7 @@ import {
 } from '../../../../lib/server';
 import { snapshot, recordReconciliations, review } from '../../../../lib/data';
 import { csv, DEFAULT_RULES, FIELDS, type Role } from '../../../../lib/domain';
+import { sortedRecords } from '../../../../lib/reporting';
 import {
   upload,
   beginExtraction,
@@ -28,6 +29,9 @@ import {
 } from '../../../../lib/documents';
 import {
   configured,
+  application,
+  oauthStatus,
+  checkConnection,
   discover,
   discoverFields,
   SYNC_DEFAULT,
@@ -57,7 +61,117 @@ export async function GET(request: Request) {
     }
     if (route === 'snapshot')
       return json({ user, ...(await snapshot(params)) });
+    if (route === 'detail') {
+      const s = await snapshot();
+      const target = params.get('id');
+      const row = s.rows.find((r: any) => r.id === target);
+      const trip = s.trips.find((t) => t.id === target);
+      const booking = s.bookings.find((b) => b.id === target);
+      const fuel = s.fuel.find((f) => f.id === target);
+      const vehicle = s.vehicles.find((v) =>
+        [v.id, v.registration].includes(target),
+      );
+      if (recordId === 'row' && row)
+        return json({
+          row,
+          documents: s.documents.filter((d) => d.id === row.documentId),
+          siblings: s.rows
+            .filter((r: any) => r.documentId === row.documentId)
+            .sort((a: any, b: any) => a.page - b.page || a.row - b.row)
+            .map((r: any) => ({
+              id: r.id,
+              page: r.page,
+              row: r.row,
+              state: r.state,
+            })),
+        });
+      if (recordId === 'trip' && trip) {
+        const q = (params.get('q') ?? '').toLowerCase();
+        const candidates = s.bookings.filter((b) =>
+          q
+            ? [
+                b.bookingRef,
+                b.employee,
+                b.driver,
+                b.destination,
+                b.vehicleId,
+              ].some((v) =>
+                String(v ?? '')
+                  .toLowerCase()
+                  .includes(q),
+              )
+            : b.id === trip.bookingId || trip.candidateIds?.includes(b.id),
+        );
+        const bookings = candidates.slice(0, 30);
+        const linked = s.bookings.find(
+          (b) => b.id === (params.get('booking') ?? trip.bookingId),
+        );
+        if (linked && !bookings.some((b) => b.id === linked.id))
+          bookings.unshift(linked);
+        return json({
+          trip,
+          data: {
+            bookings,
+            approvals: s.approvals.filter((a) =>
+              bookings.some((b) =>
+                [b.id, b.sourceId, b.bookingRef].includes(a.bookingRef),
+              ),
+            ),
+            documents: s.documents.filter((d) => d.id === trip.documentId),
+            rows: s.rows.filter((r: any) => r.id === trip.rowId),
+            trips: s.trips
+              .filter((t) => t.id !== trip.id && t.vehicleId === trip.vehicleId)
+              .slice(0, 30),
+            ruleVersion: s.ruleVersion,
+          },
+          candidateTotal: candidates.length,
+        });
+      }
+      if (recordId === 'booking' && booking)
+        return json({
+          booking,
+          approvals: s.approvals.filter((a) =>
+            [booking.id, booking.sourceId, booking.bookingRef].includes(
+              a.bookingRef,
+            ),
+          ),
+          trips: s.trips.filter((t) => t.bookingId === booking.id),
+          noUsage: s.noUsage.some((b) => b.id === booking.id),
+        });
+      if (recordId === 'fuel' && fuel) {
+        const r = s.rows.find((r: any) => r.id === fuel.rowId);
+        return json({
+          fuel,
+          row: r,
+          document: s.documents.find((d) => d.id === r?.documentId),
+        });
+      }
+      if (recordId === 'vehicle' && vehicle) {
+        const key = vehicle.registration ?? vehicle.id;
+        const trips = s.trips.filter((t) => t.vehicleId === key),
+          fuel = s.fuel.filter((f) => f.vehicleId === key),
+          bookings = s.bookings.filter((b) => b.vehicleId === key);
+        return json({
+          vehicle,
+          trips: sortedRecords(trips).slice(0, 20),
+          fuel: sortedRecords(fuel, 'date', 'desc', 'purchase').slice(0, 20),
+          bookings: sortedRecords(bookings).slice(0, 20),
+          counts: {
+            trips: trips.length,
+            fuel: fuel.length,
+            bookings: bookings.length,
+          },
+          issues: s.issues.filter((i) => trips.some((t) => t.id === i.tripId)),
+        });
+      }
+      throw new HttpError(
+        404,
+        'This record is unavailable. It may have changed since your last view.',
+      );
+    }
     if (route === 'export') {
+      params.delete('pageSize');
+      params.delete('page');
       const s = await snapshot(params);
       const type = params.get('type') ?? 'trips';
       const records =
@@ -68,14 +182,25 @@ export async function GET(request: Request) {
             : type === 'noUsage'
               ? s.noUsage
               : s.trips;
-      return new Response('\ufeff' + csv(records), {
-        headers: {
-          'Content-Type': 'text/csv;charset=utf-8',
-          'Content-Disposition': `attachment; filename="fleet-${type.replace(/[^a-z]/gi, '')}.csv"`,
-          'Cache-Control': 'private, no-store',
-          'X-Content-Type-Options': 'nosniff',
+      return new Response(
+        '\ufeff' +
+          csv(
+            sortedRecords<Record<string, unknown>>(
+              records,
+              params.get('sort') ?? 'date',
+              params.get('direction') ?? 'desc',
+              type === 'fuel' ? 'purchase' : 'journey',
+            ),
+          ),
+        {
+          headers: {
+            'Content-Type': 'text/csv;charset=utf-8',
+            'Content-Disposition': `attachment; filename="fleet-${type.replace(/[^a-z]/gi, '')}.csv"`,
+            'Cache-Control': 'private, no-store',
+            'X-Content-Type-Options': 'nosniff',
+          },
         },
-      });
+      );
     }
     if (route === 'document') {
       const doc = await first(
@@ -114,13 +239,16 @@ export async function GET(request: Request) {
     if (route === 'alerts')
       return json({
         alerts: await all(
-          "SELECT * FROM alerts WHERE state='open' ORDER BY updatedAt DESC",
+          'SELECT * FROM alerts ORDER BY updatedAt DESC LIMIT 200',
         ),
         delivery: 'disabled',
       });
     if (route === 'settings') {
       await member(['Administrator']);
       return json({
+        reportProgress: await all(
+          'SELECT report,kind,COUNT(*) AS storedRecords FROM source_records WHERE generation=(SELECT id FROM sync_runs ORDER BY startedAt DESC LIMIT 1) GROUP BY report,kind',
+        ),
         syncConfig: await setting('syncConfig', SYNC_DEFAULT),
         metadata: await setting('zohoMetadata', null),
         rules: await setting('rules', DEFAULT_RULES),
@@ -143,12 +271,18 @@ export async function GET(request: Request) {
           'SELECT * FROM sync_runs ORDER BY startedAt DESC LIMIT 30',
         ),
         configured: {
-          zoho: configured(),
+          zoho: await configured(),
+          oauth: oauthStatus(),
           extraction:
             runtime().EXTRACTION_ENABLED === 'true' &&
             !!runtime().AZURE_DOCUMENT_KEY,
           schedulerSecret: !!runtime().SCHEDULER_SECRET,
         },
+        application: await application(),
+        oauthVerifiedAt: await setting('oauthVerifiedAt', null),
+        schedulerLastSeen: await setting('schedulerLastSeen', null),
+        schedulerLastCompleted: await setting('schedulerLastCompleted', null),
+        dataCentre: runtime().ZOHO_DC ?? 'Not configured',
         budget: await all('SELECT * FROM api_budget ORDER BY day DESC LIMIT 7'),
       });
     }
@@ -167,7 +301,8 @@ export async function POST(request: Request) {
       )
         throw new HttpError(401, 'Invalid scheduler authentication.');
       const config = await setting('syncConfig', SYNC_DEFAULT);
-      if (!config.allowanceVerified || !configured())
+      await setSetting('schedulerLastSeen', now());
+      if (!config.allowanceVerified || !(await configured()))
         return json({ state: 'not configured' });
       const active = await first(
         "SELECT id FROM sync_runs WHERE status IN ('syncing','retrying')",
@@ -191,6 +326,7 @@ export async function POST(request: Request) {
         );
       }
       const result = await syncStep();
+      if (result.done) await setSetting('schedulerLastCompleted', now());
       await recordReconciliations();
       return json(result);
     }
@@ -251,6 +387,59 @@ export async function POST(request: Request) {
     }
     const user = await member(['Administrator']);
     const input = await body(request);
+    if (route === 'application') {
+      if (
+        typeof input.owner !== 'string' ||
+        typeof input.app !== 'string' ||
+        !/^[A-Za-z0-9_-]{1,160}$/.test(input.owner) ||
+        !/^[A-Za-z0-9_-]{1,160}$/.test(input.app)
+      )
+        throw new HttpError(
+          400,
+          'Enter the exact account owner and application link names from your Creator application URL.',
+        );
+      if (
+        await first(
+          "SELECT id FROM sync_runs WHERE status IN ('syncing','retrying')",
+        )
+      )
+        throw new HttpError(
+          409,
+          'Finish the active import before changing the application.',
+        );
+      const before = await application(),
+        next = { owner: input.owner, app: input.app };
+      if (JSON.stringify(before) !== JSON.stringify(next)) {
+        await db().batch([
+          db()
+            .prepare(
+              'INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+            )
+            .bind('zohoApplication', JSON.stringify(next)),
+          db().prepare('DELETE FROM settings WHERE key=?').bind('zohoMetadata'),
+          db()
+            .prepare(
+              'INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+            )
+            .bind(
+              'syncConfig',
+              JSON.stringify({
+                ...(await setting('syncConfig', SYNC_DEFAULT)),
+                mappings: [],
+              }),
+            ),
+          audit(
+            'zohoApplication',
+            'select-application',
+            user.email,
+            before,
+            next,
+          ),
+        ]);
+      }
+      return json({ saved: true, application: next });
+    }
+    if (route === 'connection-test') return json(await checkConnection());
     if (route === 'discover') return json(await discover());
     if (route === 'fields') return json(await discoverFields(input.form));
     if (route === 'sync') {

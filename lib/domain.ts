@@ -485,11 +485,16 @@ export function latestDecisions(ds: Decision[]) {
 export function filterRecords<T extends Record<string, any>>(
   rows: T[],
   p: URLSearchParams,
+  dateBasis: 'journey' | 'purchase' = 'journey',
 ): T[] {
   return rows.filter((r) => {
+    const recordedDate = r.registerDate
+      ? `${r.registerDate}T00:00:00+05:30`
+      : null;
     const dateValue =
-      r.departure ??
-      (r.registerDate ? `${r.registerDate}T00:00:00+05:30` : null);
+      dateBasis === 'purchase'
+        ? (recordedDate ?? r.departure)
+        : (r.departure ?? recordedDate);
     const ms = timestamp(dateValue);
     if (
       p.get('from') &&
@@ -505,12 +510,25 @@ export function filterRecords<T extends Record<string, any>>(
     for (const key of [
       'vehicleId',
       'employee',
+      'employeeId',
       'driver',
+      'driverId',
       'department',
+      'destination',
       'permission',
     ])
-      if (p.get(key) && normalize(r[key]) !== normalize(p.get(key)))
+      if (
+        p.get(key) &&
+        (p.get(key) === '__unknown'
+          ? !!r[key]
+          : normalize(r[key]) !== normalize(p.get(key)))
+      )
         return false;
+    if (
+      p.get('outcome') &&
+      normalize(r.permission) !== normalize(p.get('outcome'))
+    )
+      return false;
     if (p.get('source') && r.source !== p.get('source') && r.source !== 'both')
       return false;
     if (
@@ -528,7 +546,42 @@ export function filterRecords<T extends Record<string, any>>(
       !['In progress', 'Overdue'].includes(r.tripStatus)
     )
       return false;
-    if (p.get('metric') === 'distance' && r.distance === null) return false;
+    if (p.get('metric') === 'distance' && r.distance == null) return false;
+    if (p.get('metric') === 'distance-missing' && r.distance != null)
+      return false;
+    if (p.get('metric') === 'overdue' && r.tripStatus !== 'Overdue')
+      return false;
+    if (
+      p.get('metric') === 'missing' &&
+      r.returnAt &&
+      r.startOdo != null &&
+      r.endOdo != null
+    )
+      return false;
+    if (p.get('metric') === 'fuel-quantity-missing' && r.litres != null)
+      return false;
+    if (p.get('metric') === 'fuel-amount-missing' && r.amount != null)
+      return false;
+    const issue = p.get('issue');
+    if (issue === 'return' && r.returnAt) return false;
+    if (
+      issue === 'odometer' &&
+      r.startOdo != null &&
+      r.endOdo != null &&
+      r.endOdo >= r.startOdo
+    )
+      return false;
+    if (issue === 'time' && timestamp(r.departure) !== null) return false;
+    if (issue === 'approval' && !PERMISSIONS.slice(2, 4).includes(r.permission))
+      return false;
+    if (
+      issue === 'conflict' &&
+      r.permission !== PERMISSIONS[1] &&
+      !r.differences?.some((x: string) =>
+        /differs|exceeds|changed since/i.test(x),
+      )
+    )
+      return false;
     return true;
   });
 }

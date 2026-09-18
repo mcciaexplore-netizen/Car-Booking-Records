@@ -1,5 +1,4 @@
 import {
-  all,
   first,
   db,
   setting,
@@ -266,6 +265,21 @@ export function extractDrafts(
           rowIndex,
           cells,
           headers: Object.fromEntries(headers),
+          values: checked.values,
+          fieldColumns: columns,
+          pageGeometry: (() => {
+            const p = (result.pages ?? []).find(
+              (p: any) => p.pageNumber === page,
+            );
+            return p
+              ? {
+                  width: p.width,
+                  height: p.height,
+                  unit: p.unit,
+                  pageNumber: p.pageNumber,
+                }
+              : null;
+          })(),
         },
         values: checked.values,
         flags: [...flags, ...checked.flags],
@@ -435,7 +449,15 @@ export async function saveRow(
       .prepare(
         'UPDATE extracted_rows SET corrected=?,state=?,version=version+1,flags=?,reviewer=?,reviewedAt=? WHERE id=? AND version=?',
       )
-      .bind(encoded, state, '[]', actor, stamp, rowId, version),
+      .bind(
+        encoded,
+        state,
+        confirm ? '[]' : row.flags,
+        actor,
+        stamp,
+        rowId,
+        version,
+      ),
   ];
   // Reopening a correction removes that row from confirmed metrics until reconfirmed.
   if (confirm && (row.kind === 'movement' || row.kind === 'driver'))

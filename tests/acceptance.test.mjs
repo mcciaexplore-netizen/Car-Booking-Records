@@ -6,9 +6,13 @@ import {
   domain as d,
   server as s,
   zoho as z,
+  oauth,
   documents as docs,
   data as dataService,
   routes,
+  reporting,
+  evidenceView,
+  LatestRequest,
 } from '../work/fleet-tests.mjs';
 let sqlite;
 const realFetch = globalThis.fetch;
@@ -431,6 +435,7 @@ function zohoFetch(records, fail = false) {
     if (String(url).includes('/oauth/'))
       return Response.json({
         access_token: 'ephemeral',
+        expires_in: 3600,
         api_domain: 'https://www.zohoapis.in',
       });
     assert.ok(String(url).startsWith('https://www.zohoapis.in/creator/v2.1/'));
@@ -509,6 +514,97 @@ test('API budget stops requests and secrets never appear in snapshot', async () 
   const output = JSON.stringify(await dataService.snapshot());
   assert.ok(!output.includes('test-secret'));
   assert.ok(!output.includes('test-refresh'));
+});
+
+test('OAuth reuses access, renews before expiry, and drops cached access after credential rotation', async () => {
+  let time = 1000000,
+    calls = 0;
+  const manager = oauth.createTokenManager(() => time);
+  const credentials = {
+    ZOHO_CLIENT_ID: 'fixture-id',
+    ZOHO_CLIENT_SECRET: 'fixture-secret',
+    ZOHO_REFRESH_TOKEN: 'fixture-refresh',
+    ZOHO_DC: 'IN',
+  };
+  globalThis.fetch = async (url, options) => {
+    calls++;
+    assert.equal(url, 'https://accounts.zoho.in/oauth/v2/token');
+    assert.equal(options.redirect, 'manual');
+    assert.equal(options.body.get('grant_type'), 'refresh_token');
+    return Response.json({
+      access_token: 'access-' + calls,
+      api_domain: 'https://www.zohoapis.in',
+      expires_in: 3600,
+    });
+  };
+  assert.equal((await manager.get(credentials)).access, 'access-1');
+  time += 3500000;
+  assert.equal((await manager.get(credentials)).access, 'access-1');
+  assert.equal(calls, 1);
+  time += 41000;
+  assert.equal((await manager.get(credentials)).access, 'access-2');
+  assert.equal(
+    (await manager.get({ ...credentials, ZOHO_REFRESH_TOKEN: 'rotated' }))
+      .access,
+    'access-3',
+  );
+  assert.ok(!JSON.stringify(manager.status(credentials)).includes('access-'));
+});
+
+test('OAuth rejects unsafe responses, redacts exceptions, and backs off failed renewal', async () => {
+  const credentials = {
+    ZOHO_CLIENT_ID: 'fixture-id',
+    ZOHO_CLIENT_SECRET: 'fixture-secret',
+    ZOHO_REFRESH_TOKEN: 'fixture-refresh',
+    ZOHO_DC: 'IN',
+  };
+  for (const body of [
+    {
+      access_token: 'access',
+      api_domain: 'https://evil.example',
+      expires_in: 3600,
+    },
+    {
+      access_token: 'access',
+      api_domain: 'https://www.zohoapis.in',
+      expires_in: 0,
+    },
+    { error: 'invalid_code', detail: 'fixture-secret' },
+  ]) {
+    const manager = oauth.createTokenManager();
+    globalThis.fetch = async () => Response.json(body);
+    await assert.rejects(
+      manager.get(credentials),
+      (error) => !error.message.includes('fixture-secret'),
+    );
+    assert.equal(manager.status(credentials).verified, false);
+  }
+  let calls = 0,
+    time = 1000000;
+  const manager = oauth.createTokenManager(() => time);
+  globalThis.fetch = async () => {
+    calls++;
+    throw Error('fixture-secret');
+  };
+  await assert.rejects(manager.get(credentials), /could not complete/);
+  await assert.rejects(manager.get(credentials), /could not complete/);
+  assert.equal(calls, 1);
+  time += 60001;
+  await assert.rejects(manager.get(credentials), /could not complete/);
+  assert.equal(calls, 2);
+});
+
+test('connection verification requires an administrator and returns status without tokens', async () => {
+  await setupSync();
+  zohoFetch([]);
+  const response = await routes.POST(request('connection-test', {}));
+  assert.equal(response.status, 200);
+  const output = await response.text();
+  assert.equal(JSON.parse(output).verified, true);
+  for (const secret of ['test-secret', 'test-refresh', 'ephemeral'])
+    assert.ok(!output.includes(secret));
+  await s.db().prepare("UPDATE users SET role='Viewer'").run();
+  assert.equal((await routes.POST(request('connection-test', {}))).status, 403);
 });
 test('calendar overflow dates are rejected instead of normalized into another day', () => {
   assert.equal(d.timestamp('2026-02-30T09:00:00+05:30'), null);
@@ -596,6 +692,7 @@ test('incremental import preserves unchanged records and sends an overlapped mod
     if (String(url).includes('/oauth/'))
       return Response.json({
         access_token: 'ephemeral',
+        expires_in: 3600,
         api_domain: 'https://www.zohoapis.in',
       });
     criterion = new URL(url).searchParams.get('criteria');
@@ -610,4 +707,295 @@ test('incremental import preserves unchanged records and sends an overlapped mod
   assert.equal(vehicles.length, 2);
   assert.ok(vehicles.some((v) => v.registration === 'CHANGED'));
   assert.ok(criterion.includes('Observed_Modified'));
+});
+
+test('report pagination keeps full metrics, clamps pages and exports all filtered results', async () => {
+  const { doc } = await draft();
+  for (let i = 1; i <= 23; i++) {
+    const rowId = await docs.addManualRow(doc.documentId, 1, i, 'operator');
+    await docs.saveRow(
+      rowId,
+      1,
+      trip({
+        employee: 'Test ' + String(i).padStart(2, '0'),
+        bookingRef: null,
+        startOdo: 100 + i * 50,
+        endOdo: i === 23 ? null : 140 + i * 50,
+      }),
+      true,
+      'operator',
+    );
+  }
+  const page = await dataService.snapshot(
+    new URLSearchParams('page=2&pageSize=10&sort=employee&direction=asc'),
+  );
+  assert.equal(page.trips.length, 10);
+  assert.equal(page.trips[0].employee, 'Test 11');
+  assert.equal(page.metrics.trips, 23);
+  assert.equal(page.metrics.distanceExcluded, 1);
+  assert.equal(page.metrics.distance, 880);
+  assert.equal(page.pagination.trips.total, 23);
+  assert.equal(page.rows[0].original, undefined);
+  const last = await dataService.snapshot(
+    new URLSearchParams('page=99&pageSize=10'),
+  );
+  assert.equal(last.pagination.trips.page, 3);
+  assert.equal(last.trips.length, 3);
+  const response = await routes.GET(
+    request('export?type=trips&page=2&pageSize=10&sort=employee&direction=asc'),
+  );
+  const text = await response.text();
+  assert.equal(text.trim().split(/\r?\n/).length, 24);
+  assert.ok(text.indexOf('Test 01') < text.indexOf('Test 23'));
+  const detail = await routes.GET(
+    request('detail/trip?id=' + last.trips[0].id),
+  );
+  assert.equal(detail.status, 200);
+});
+test('pending document filters apply before pagination and row evidence loads on demand', async () => {
+  const { doc, rowId } = await draft();
+  await docs.saveRow(rowId, 1, trip(), true, 'operator');
+  const file = new File(
+    [new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 0, 4])],
+    'other.png',
+    { type: 'image/png' },
+  );
+  const pending = await docs.upload(file, 'movement', 'operator');
+  const snap = await dataService.snapshot(
+    new URLSearchParams('metric=pending&pageSize=10'),
+  );
+  assert.equal(snap.documents.length, 1);
+  assert.equal(snap.documents[0].id, pending.documentId);
+  assert.equal(snap.metrics.pending, 1);
+  assert.equal(snap.pagination.documents.total, 1);
+  const response = await routes.GET(request('detail/row?id=' + rowId));
+  const detail = await response.json();
+  assert.equal(detail.row.documentId, doc.documentId);
+  assert.ok(detail.row.original);
+  assert.ok(detail.row.corrected);
+  globalThis.TEST_HEADERS = new Headers();
+  for (const path of [
+    'detail/row?id=' + rowId,
+    'detail/trip?id=t1',
+    'history/' + rowId,
+    'settings',
+  ])
+    assert.equal((await routes.GET(request(path))).status, 401);
+});
+test('report groups preserve missing values, true zero and the IST month boundary', () => {
+  assert.equal(reporting.periodKey('2026-08-31T19:00:00Z', true), '2026-09');
+  assert.equal(reporting.periodKey(null), 'Unknown date');
+  const summary = reporting.summarize({
+    trips: [
+      { ...trip(), distance: null, employee: null },
+      { ...trip(), id: 't2', distance: 0 },
+    ],
+    fuel: [
+      {
+        id: 'f1',
+        registerDate: '2026-09-01',
+        vehicleId: null,
+        litres: null,
+        amount: 0,
+      },
+    ],
+  });
+  assert.equal(summary.employee.find((g) => g.key === '__unknown').count, 1);
+  assert.equal(summary.vehicle[0].distance, 0);
+  assert.equal(summary.vehicle[0].excluded, 1);
+  assert.equal(summary.fuelMonths[0].litres, null);
+  assert.equal(summary.fuelMonths[0].amount, 0);
+  assert.equal(summary.fuelMonths[0].quantityMissing, 1);
+  const f = { registerDate: '2026-09-02', departure: '2026-08-01T00:00:00Z' };
+  assert.equal(
+    d.filterRecords([f], new URLSearchParams('from=2026-09-01'), 'purchase')
+      .length,
+    1,
+  );
+  assert.equal(
+    d.filterRecords([f], new URLSearchParams('from=2026-09-01'), 'journey')
+      .length,
+    0,
+  );
+});
+test('application selection is admin-only, validates link names and preserves imported evidence', async () => {
+  await s.setSetting('activeGeneration', 'existing-import');
+  await s.setSetting('zohoMetadata', { reports: ['old'] });
+  await s.setSetting('syncConfig', {
+    ...z.SYNC_DEFAULT,
+    mappings: [{ kind: 'vehicles', report: 'old' }],
+  });
+  assert.equal(
+    (
+      await routes.POST(
+        request('application', { owner: 'account', app: 'fleet-app' }),
+      )
+    ).status,
+    200,
+  );
+  assert.deepEqual(await s.setting('zohoApplication', null), {
+    owner: 'account',
+    app: 'fleet-app',
+  });
+  assert.equal(await s.setting('zohoMetadata', null), null);
+  assert.deepEqual((await s.setting('syncConfig', {})).mappings, []);
+  assert.equal(await s.setting('activeGeneration', null), 'existing-import');
+  assert.equal(
+    (
+      await routes.POST(
+        request('application', { owner: 'https://example.com', app: 'fleet' }),
+      )
+    ).status,
+    400,
+  );
+  await s.db().prepare("UPDATE users SET role='Viewer'").run();
+  assert.equal(
+    (
+      await routes.POST(
+        request('application', { owner: 'other', app: 'other' }),
+      )
+    ).status,
+    403,
+  );
+});
+test('original field text and coordinate overlays never guess missing or invalid evidence', () => {
+  const original = {
+    values: { endOdo: null },
+    fieldColumns: { End: 'endOdo' },
+    headers: { 0: 'End' },
+    pageGeometry: { pageNumber: 1, width: 100, height: 200 },
+    cells: [
+      {
+        columnIndex: 0,
+        content: '1?0',
+        boundingRegions: [
+          { pageNumber: 1, polygon: [10, 20, 50, 20, 50, 60, 10, 60] },
+        ],
+      },
+    ],
+  };
+  assert.equal(evidenceView.originalField(original, 'endOdo'), '1?0');
+  assert.equal(evidenceView.originalField(original, 'driver'), null);
+  assert.deepEqual(evidenceView.rowPolygons(original, 1), [
+    '10,10 50,10 50,30 10,30',
+  ]);
+  assert.deepEqual(evidenceView.rowPolygons(original, 2), []);
+  assert.deepEqual(
+    evidenceView.rowPolygons({ ...original, pageGeometry: null }, 1),
+    [],
+  );
+  original.cells[0].boundingRegions[0].polygon[0] = -1;
+  assert.deepEqual(evidenceView.rowPolygons(original, 1), []);
+});
+
+test('a slower obsolete response cannot replace a newer filter result even when abort is ignored', async () => {
+  const loader = new LatestRequest(),
+    values = [],
+    errors = [];
+  let releaseOld;
+  const old = loader.run(
+    () =>
+      new Promise((resolve) => {
+        releaseOld = resolve;
+      }),
+    (v) => values.push(v),
+    (e) => errors.push(e),
+    () => {},
+  );
+  await loader.run(
+    async () => ({ query: 'new' }),
+    (v) => values.push(v),
+    (e) => errors.push(e),
+    () => {},
+  );
+  releaseOld({ query: 'old' });
+  await old;
+  assert.deepEqual(values, [{ query: 'new' }]);
+  assert.deepEqual(errors, []);
+  let rejectOld;
+  const oldFailure = loader.run(
+    () =>
+      new Promise((_, reject) => {
+        rejectOld = reject;
+      }),
+    (v) => values.push(v),
+    (e) => errors.push(e),
+    () => {},
+  );
+  await loader.run(
+    async () => ({ query: 'latest' }),
+    (v) => values.push(v),
+    (e) => errors.push(e),
+    () => {},
+  );
+  rejectOld(Error('obsolete error'));
+  await oldFailure;
+  assert.equal(errors.length, 0);
+});
+test('cancelling the active read prevents protected data from being restored by its late result', async () => {
+  const loader = new LatestRequest();
+  let release,
+    committed = false,
+    settled = false;
+  const work = loader.run(
+    () => new Promise((resolve) => (release = resolve)),
+    () => {
+      committed = true;
+    },
+    () => {},
+    () => {
+      settled = true;
+    },
+  );
+  loader.cancel();
+  release({ private: true });
+  await work;
+  assert.equal(committed, false);
+  assert.equal(settled, false);
+});
+
+test('metric drill-down intersects the global permission filter instead of widening its scope', () => {
+  const rows = [
+    { ...trip(), permission: d.PERMISSIONS[0], distance: 40 },
+    { ...trip(), id: 't2', permission: d.PERMISSIONS[4], distance: null },
+  ];
+  const p = new URLSearchParams({
+    permission: d.PERMISSIONS[0],
+    outcome: d.PERMISSIONS[4],
+  });
+  assert.equal(d.filterRecords(rows, p).length, 0);
+  p.delete('outcome');
+  p.set('metric', 'distance');
+  assert.equal(d.filterRecords(rows, p).length, 1);
+  p.set('metric', 'review');
+  assert.equal(d.filterRecords(rows, p).length, 0);
+});
+
+test('fuel report ordering uses purchase dates even when journey dates differ', () => {
+  const purchases = [
+    {
+      id: 'earlier-purchase',
+      registerDate: '2026-09-01',
+      departure: '2026-09-15T04:00:00Z',
+    },
+    {
+      id: 'later-purchase',
+      registerDate: '2026-09-10',
+      departure: '2026-09-02T04:00:00Z',
+    },
+    { id: 'undated-purchase', registerDate: null, departure: null },
+  ];
+  assert.deepEqual(
+    reporting
+      .sortedRecords(purchases, 'date', 'desc', 'purchase')
+      .map((r) => r.id),
+    ['later-purchase', 'earlier-purchase', 'undated-purchase'],
+  );
+  assert.deepEqual(
+    reporting
+      .sortedRecords(purchases, 'date', 'asc', 'purchase')
+      .map((r) => r.id),
+    ['earlier-purchase', 'later-purchase', 'undated-purchase'],
+  );
+  assert.equal(reporting.sortedRecords(purchases)[0].id, 'earlier-purchase');
 });

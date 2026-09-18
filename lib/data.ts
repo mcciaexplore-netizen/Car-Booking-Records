@@ -1,4 +1,15 @@
-import { all, first, db, setting, now, hash, id, HttpError } from './server';
+import {
+  all,
+  first,
+  db,
+  setting,
+  now,
+  hash,
+  id,
+  HttpError,
+  runtime,
+} from './server';
+import { pageRecords, sortedRecords, summarize } from './reporting';
 import {
   RULE_VERSION,
   PERMISSIONS,
@@ -163,7 +174,13 @@ export async function snapshot(params = new URLSearchParams()) {
   const data = await dataset(),
     evaluated = await evaluate(data),
     trips = filterRecords(evaluated, params);
-  const fuel = filterRecords(data.fuel, params);
+  const fuelParams = new URLSearchParams(params);
+  fuelParams.delete('permission');
+  fuelParams.delete('outcome');
+  fuelParams.delete('issue');
+  if (!fuelParams.get('metric')?.startsWith('fuel-'))
+    fuelParams.delete('metric');
+  const fuel = filterRecords(data.fuel, fuelParams, 'purchase');
   const docs = await all(
     'SELECT id,name,mime,size,kind,status,uploadedBy,createdAt,error,deletedAt FROM documents WHERE deletedAt IS NULL ORDER BY createdAt DESC',
   );
@@ -236,7 +253,14 @@ export async function snapshot(params = new URLSearchParams()) {
   });
   const bookings = filterRecords(
     data.bookings.map((b) => ({ ...b, source: 'zoho' })),
-    params,
+    (() => {
+      const p = new URLSearchParams(params);
+      p.delete('metric');
+      p.delete('permission');
+      p.delete('outcome');
+      p.delete('issue');
+      return p;
+    })(),
   );
   const noUsage = bookings.filter((b) => {
     const events = data.approvals.filter((a) =>
@@ -256,7 +280,8 @@ export async function snapshot(params = new URLSearchParams()) {
       last?.decision === 'approved'
     );
   });
-  return {
+  const result = {
+    fixtureMode: runtime().FLEET_UX_FIXTURES === '1',
     trips,
     fuel,
     vehicles,
@@ -270,9 +295,19 @@ export async function snapshot(params = new URLSearchParams()) {
     decisions: data.decisions,
     metrics: metrics(trips, fuel, pending),
     noUsage,
-    issues: odometerIssues(trips),
+    issues: odometerIssues(trips).map((issue) => {
+      const t = trips.find((t) => t.id === issue.tripId);
+      return {
+        ...issue,
+        departure: t?.departure,
+        registerDate: t?.registerDate,
+        vehicleId: t?.vehicleId,
+        startOdo: t?.startOdo,
+        endOdo: t?.endOdo,
+      };
+    }),
     freshness: {
-      connected: configured(),
+      connected: await configured(),
       sync,
       lastSuccess: success?.finishedAt ?? null,
       stale,
@@ -280,6 +315,145 @@ export async function snapshot(params = new URLSearchParams()) {
       intervalMinutes: config.intervalMinutes,
     },
     ruleVersion: RULE_VERSION,
+    extractionAvailable:
+      runtime().EXTRACTION_ENABLED === 'true' &&
+      !!runtime().AZURE_DOCUMENT_KEY &&
+      !!runtime().AZURE_DOCUMENT_ENDPOINT,
+    hasRecords: !!(
+      data.generation ||
+      data.trips.length ||
+      docs.length ||
+      data.fuel.length
+    ),
+    counts: {
+      trips: trips.length,
+      bookings: bookings.length,
+      fuel: fuel.length,
+      documents: docs.length,
+      noUsage: noUsage.length,
+      maintenance: filterRecords(data.maintenance, params).length,
+    },
+    personOptions: Object.fromEntries(
+      ['employee', 'driver'].map((key) => [
+        key,
+        [
+          ...new Map(
+            [...evaluated, ...data.bookings]
+              .filter((r) => r[key as 'employee' | 'driver'])
+              .map((r) => {
+                const person = r as Record<string, unknown>;
+                const name = String(person[key]);
+                const id = person[key + 'Id'];
+                return [
+                  id ? 'id:' + id : name,
+                  {
+                    value: id ? 'id:' + id : name,
+                    label: name + (id ? ' · ' + id : ''),
+                  },
+                ];
+              }),
+          ).values(),
+        ].sort((a, b) => a.label.localeCompare(b.label)),
+      ]),
+    ),
+    options: Object.fromEntries(
+      ['employee', 'driver', 'department', 'destination'].map((key) => [
+        key,
+        [
+          ...new Set(
+            [...evaluated, ...data.bookings]
+              .map((r: any) => r[key])
+              .filter(Boolean),
+          ),
+        ].sort(),
+      ]),
+    ),
+  };
+  if (!params.has('pageSize')) return result;
+  const summaries = summarize(result);
+  const page = Number(params.get('page')) || 1,
+    size = Number(params.get('pageSize')) || 20;
+  const sort = [
+    'date',
+    'employee',
+    'vehicleId',
+    'distance',
+    'amount',
+    'litres',
+    'name',
+  ].includes(params.get('sort') ?? '')
+    ? params.get('sort')!
+    : 'date';
+  const lists = [
+    'trips',
+    'bookings',
+    'fuel',
+    'documents',
+    'noUsage',
+    'maintenance',
+  ] as const;
+  const pagination: Record<string, any> = {};
+  const paged = { ...result };
+  for (const key of lists) {
+    const list =
+      key === 'bookings' && params.get('metric') === 'no-usage'
+        ? noUsage
+        : key === 'documents' && params.get('metric') === 'pending'
+          ? docs.filter(
+              (d) =>
+                pendingRows.some((r) => r.documentId === d.id) ||
+                !rows.some((r) => r.documentId === d.id),
+            )
+          : result[key];
+    const p = pageRecords(
+      sortedRecords(
+        list as Record<string, unknown>[],
+        sort,
+        params.get('direction') ?? 'desc',
+        key === 'fuel' ? 'purchase' : 'journey',
+      ),
+      page,
+      size,
+    );
+    (paged as any)[key] = p.items;
+    pagination[key] = { ...p, items: undefined };
+  }
+  const docIds = new Set(paged.documents.map((d) => d.id));
+  // Lists contain row references only; original/corrected evidence is fetched on demand.
+  paged.rows = rows
+    .filter((r) => docIds.has(r.documentId))
+    .map(({ id, documentId, page, row, state }: any) => ({
+      id,
+      documentId,
+      page,
+      row,
+      state,
+    })) as any;
+  paged.approvals = data.approvals.filter((a) =>
+    paged.bookings.some((b) =>
+      [b.id, b.sourceId, b.bookingRef].includes(a.bookingRef),
+    ),
+  );
+  paged.decisions = [];
+  return {
+    ...paged,
+    summaries,
+    pagination,
+    recentTrips: sortedRecords(trips).slice(0, 5),
+    documentProgress: Object.fromEntries(
+      docs.map((d) => {
+        const rs = rows.filter((r) => r.documentId === d.id);
+        return [
+          d.id,
+          {
+            total: rs.length,
+            confirmed: rs.filter((r) => r.state === 'Confirmed register entry')
+              .length,
+            pageCount: d.mime === 'application/pdf' ? null : 1,
+          },
+        ];
+      }),
+    ),
   };
 }
 export async function recordReconciliations() {

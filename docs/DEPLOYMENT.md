@@ -30,3 +30,30 @@ On a company-owned Cloudflare account, provision actual D1/R2 resources, migrate
 Back up both database and originals before migrations. Roll back to a compatible saved application version when required; this does not undo schema changes. Forward-fix applied migrations. Restore D1 and R2 together to preserve links. Company backup/restore testing and retention approval remain outstanding.
 
 Monitor sync errors, API counters, uncertain extraction submissions, pending reviews and historical storage growth. No external notification provider is active.
+
+## Frontend upgrade deployment notes — 18 September 2026
+
+The current source was built locally and has not been published. Review UX-IMPLEMENTATION.md and the failed strict-lint gate before a release decision. The frontend adds no runtime dependency and no new SQL migration. Additive settings use the existing settings table; document evidence uses the existing original JSON column. Existing D1/R2 data must be preserved.
+
+The Sites `build-site.mjs` helper was attempted on Windows and failed while resolving an npm executable under the workspace's `node_modules/npm/bin`. The project command `npm.cmd run build` successfully built the same application. This is a local helper limitation; a passing build is not a saved/published Site version. Packaging, source push, private publication and deployed smoke checks still require the existing documented release flow and an explicit publication request.
+
+### Reproduce the isolated populated UI checks
+
+Use a separate development terminal. These commands do not seed the normal local workspace or production:
+
+```powershell
+npm.cmd test
+node scripts/seed-ux-fixtures.mjs
+$env:FLEET_UX_FIXTURES='1'
+npm.cmd run dev -- --host 127.0.0.1 --port 3000
+```
+
+The fixture seed preserves an existing fixture database rather than overwriting it. It stores clearly synthetic records in `.wrangler/ux-fixtures/v3`, separate from `.wrangler/state`. Fixture mode is restricted to development serving. Its runtime exposes only isolated database/object bindings and the local test administrator, omitting integration secrets; do not repurpose this mechanism for production authentication. Fixture pictures explicitly say TEST FIXTURE, NOT LIVE COMPANY DATA.
+
+For failure/recovery checks, `node scripts/ux-fixture-scenario.mjs failure`, `recover`, `denied` or `allow` changes only the synthetic namespace after verifying its marker. Always restore `recover` and `allow`. Do not run analogous mutations against real company data or staff.
+
+Stop the fixture server, then run `Remove-Item Env:FLEET_UX_FIXTURES` in that same terminal and start the normal preview. This removes the process environment flag only; it does not delete data. Unset is the normal default. No fixture seeding script runs in a production build.
+
+### Release gates still required
+
+Resolve lint; perform the remaining keyboard/assistive-technology/PDF checks; verify real OAuth, inspected mappings, import counts and account budgets; verify authorized production roles/images/exports; configure/test the supported private scheduler; validate extraction against approved real documents; and confirm billing/retention/backup/scale. Then request publication of this concrete version to the existing private audience.
